@@ -1,0 +1,36 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "SmartHomeEnergy Setup",
+                "description": "Configure smart battery charging based on electricity prices.",
+                "data": {
+                    "price_sensor": "Electricity price sensor",
+                    "battery_device_id": "Battery device (Huawei Solar)",
+                    "discharge_power_entity": "Maximum discharge power entity",
+                    "cheapest_charge_hours": "Number of cheapest hours to charge",
+                    "expensive_discharge_hours": "Number of expensive hours to allow discharge",
+                    "night_start": "Night period start (hour)",
+                    "night_end": "Night period end (hour)",
+                    "charge_power": "Charge power (W)",
+                    "max_discharge_power": "Max discharge power (W)"
+                }
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "SmartHomeEnergy Settings",
+                "data": {
+                    "cheapest_charge_hours": "Number of cheapest hours to charge",
+                    "expensive_discharge_hours": "Number of expensive hours to allow discharge",
+                    "night_start": "Night period start (hour)",
+                    "night_end": "Night period end (hour)",
+                    "charge_power": "Charge power (W)",
+                    "max_discharge_power": "Max discharge power (W)"
+                }
+            }
+        }
+    }
+}

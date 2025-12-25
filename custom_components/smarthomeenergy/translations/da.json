@@ -1,0 +1,36 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "SmartHomeEnergy Opsaetning",
+                "description": "Konfigurer smart batteriopladning baseret paa elpriser.",
+                "data": {
+                    "price_sensor": "Elpris sensor",
+                    "battery_device_id": "Batteri enhed (Huawei Solar)",
+                    "discharge_power_entity": "Maksimal afladningseffekt entity",
+                    "cheapest_charge_hours": "Antal billigste timer til opladning",
+                    "expensive_discharge_hours": "Antal dyre timer til afladning",
+                    "night_start": "Natperiode start (time)",
+                    "night_end": "Natperiode slut (time)",
+                    "charge_power": "Opladningseffekt (W)",
+                    "max_discharge_power": "Max afladningseffekt (W)"
+                }
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "SmartHomeEnergy Indstillinger",
+                "data": {
+                    "cheapest_charge_hours": "Antal billigste timer til opladning",
+                    "expensive_discharge_hours": "Antal dyre timer til afladning",
+                    "night_start": "Natperiode start (time)",
+                    "night_end": "Natperiode slut (time)",
+                    "charge_power": "Opladningseffekt (W)",
+                    "max_discharge_power": "Max afladningseffekt (W)"
+                }
+            }
+        }
+    }
+}
