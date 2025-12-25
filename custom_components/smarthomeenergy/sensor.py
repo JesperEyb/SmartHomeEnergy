@@ -160,29 +160,32 @@ class SmartHomeEnergyPlanSensor(SmartHomeEnergyBaseSensor):
 
     @property
     def extra_state_attributes(self) -> dict:
-        """Return the full hourly plan."""
+        """Return the hourly plan summary."""
         plan = self._coordinator.hourly_plan
         current_hour = datetime.now().hour
-
-        # Mark current hour
-        for p in plan:
-            p["is_current"] = p.get("hour") == current_hour
 
         # Calculate charge and discharge hours
         charge_hours = [p["hour"] for p in plan if p.get("action") == "charge"]
         discharge_hours = [p["hour"] for p in plan if p.get("action") == "discharge"]
 
+        # Create compact hourly summary (only hour and action)
+        hourly_summary = [
+            {"h": p.get("hour"), "a": p.get("action", "idle")[0]}  # i=idle, c=charge, d=discharge
+            for p in plan
+        ]
+
         attrs = {
-            "hourly_plan": plan,
             "charge_hours": charge_hours,
             "discharge_hours": discharge_hours,
             "current_hour": current_hour,
             "hours_planned": len(plan),
+            "hourly_summary": hourly_summary,
         }
 
         result = self._coordinator.optimization_result
         if result:
             attrs["optimization_time"] = result.optimization_time.isoformat()
+            attrs["net_benefit"] = round(result.net_benefit, 2)
 
         return attrs
 

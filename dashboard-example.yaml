@@ -1,0 +1,61 @@
+# SmartHomeEnergy Dashboard Example
+# Add this to your Lovelace dashboard
+
+# First, add the custom card resource in your Lovelace config:
+# resources:
+#   - url: /local/community/smarthomeenergy/smarthomeenergy-card.js
+#     type: module
+
+# Or if you copied it manually to /config/www/:
+# resources:
+#   - url: /local/smarthomeenergy-card.js
+#     type: module
+
+# Then use the card in your dashboard:
+
+views:
+  - title: SmartHomeEnergy
+    path: smarthomeenergy
+    icon: mdi:battery-charging
+    cards:
+      # Custom SmartHomeEnergy Card
+      - type: custom:smarthomeenergy-card
+
+      # Alternative: Use standard HA cards
+      - type: entities
+        title: SmartHomeEnergy Status
+        entities:
+          - entity: sensor.smarthomeenergy_status
+            name: Status
+          - entity: sensor.smarthomeenergy_handling
+            name: Handling
+          - entity: sensor.smarthomeenergy_naeste_handling
+            name: Næste handling
+          - entity: sensor.smarthomeenergy_forventet_gevinst
+            name: Forventet gevinst
+          - entity: switch.smarthomeenergy_aktiv
+            name: Aktiv
+          - entity: button.smarthomeenergy_optimer
+            name: Kør optimering
+
+      - type: markdown
+        title: Dagsplan
+        content: |
+          **Status:** {{ states('sensor.smarthomeenergy_status') }}
+
+          **Nuværende handling:** {{ states('sensor.smarthomeenergy_handling') }}
+
+          **Plan:** {{ states('sensor.smarthomeenergy_dagsplan') }}
+
+          **Opladningstimer:** {{ state_attr('sensor.smarthomeenergy_dagsplan', 'charge_hours') }}
+
+          **Afladningstimer:** {{ state_attr('sensor.smarthomeenergy_dagsplan', 'discharge_hours') }}
+
+          **Forventet gevinst:** {{ states('sensor.smarthomeenergy_forventet_gevinst') }} DKK
+
+      - type: history-graph
+        title: Batteri aktivitet
+        hours_to_show: 24
+        entities:
+          - entity: sensor.smarthomeenergy_handling
+          - entity: sensor.smarthomeenergy_status
