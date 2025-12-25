@@ -295,6 +295,11 @@ class SmartChargeCoordinator:
             return
 
         try:
+            # If we don't have prices yet, try to scan
+            if not self._all_prices:
+                _LOGGER.debug("No prices loaded, scanning...")
+                await self._async_scan_prices()
+
             current_hour = datetime.now().hour
             old_mode = self._current_mode
 
