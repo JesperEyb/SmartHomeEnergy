@@ -25,6 +25,7 @@ from .const import (
     CONF_MIN_SOC,
     CONF_MAX_SOC,
     DEFAULT_PRICE_SENSOR,
+    DEFAULT_TOMORROW_PRICE_SENSOR,
     DEFAULT_DISCHARGE_POWER_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_CHARGE_POWER,
@@ -44,6 +45,71 @@ from .optimizer import BatteryOptimizer, BatteryAction, OptimizationResult
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON]
+
+
+def _parse_price_data(prices: list, source_format: str = "auto") -> list[dict]:
+    """Parse price data from different sensor formats into a unified format.
+
+    Returns a list of dicts with keys: hour, price, start (datetime)
+    """
+    parsed = []
+
+    if not prices:
+        return parsed
+
+    for entry in prices:
+        try:
+            # Get the price value
+            price = None
+            if isinstance(entry.get("price"), (int, float)):
+                price = float(entry["price"])
+            elif isinstance(entry.get("value"), (int, float)):
+                price = float(entry["value"])
+
+            if price is None:
+                continue
+
+            # Get the start time
+            start_str = entry.get("start") or entry.get("hour")
+            if not start_str:
+                continue
+
+            # Parse datetime
+            if isinstance(start_str, datetime):
+                start_dt = start_str
+            elif isinstance(start_str, str):
+                # Try different formats
+                for fmt in [
+                    "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%dT%H:%M:%S.%f%z",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S.%f",
+                ]:
+                    try:
+                        start_dt = datetime.strptime(start_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    _LOGGER.warning("Could not parse datetime: %s", start_str)
+                    continue
+            else:
+                continue
+
+            # Make timezone-naive for comparison
+            if start_dt.tzinfo is not None:
+                start_dt = start_dt.replace(tzinfo=None)
+
+            parsed.append({
+                "start": start_dt,
+                "price": price,
+            })
+
+        except Exception as e:
+            _LOGGER.debug("Error parsing price entry %s: %s", entry, e)
+            continue
+
+    return parsed
 
 
 def _get_int(value: Any, default: int) -> int:
@@ -309,7 +375,7 @@ class SmartChargeCoordinator:
         self._notify_listeners()
 
         try:
-            # Get price data
+            # Get price data from main sensor
             state = self.hass.states.get(self.price_sensor)
             if state is None:
                 _LOGGER.error("Price sensor %s not found", self.price_sensor)
@@ -317,17 +383,51 @@ class SmartChargeCoordinator:
                 self._notify_listeners()
                 return False
 
-            raw_today = state.attributes.get("raw_today") or []
-            raw_tomorrow = state.attributes.get("raw_tomorrow") or []
-            all_prices = raw_today + raw_tomorrow
+            all_raw_prices = []
 
-            if not all_prices:
-                _LOGGER.error("No price data available")
+            # Try Strømligning format first (prices attribute)
+            prices_attr = state.attributes.get("prices")
+            if prices_attr:
+                _LOGGER.debug("Using Strømligning format (prices attribute)")
+                all_raw_prices.extend(prices_attr)
+
+                # Get tomorrow's prices from binary sensor
+                tomorrow_sensor = self.price_sensor.replace(
+                    "sensor.", "binary_sensor."
+                ).replace("current_price", "tomorrow_spotprice")
+
+                tomorrow_state = self.hass.states.get(tomorrow_sensor)
+                if tomorrow_state:
+                    tomorrow_prices = tomorrow_state.attributes.get("prices") or []
+                    if tomorrow_prices:
+                        _LOGGER.debug("Got %d tomorrow prices from %s", len(tomorrow_prices), tomorrow_sensor)
+                        all_raw_prices.extend(tomorrow_prices)
+                else:
+                    _LOGGER.debug("Tomorrow sensor %s not found", tomorrow_sensor)
+
+            else:
+                # Try Energi Data Service format (raw_today/raw_tomorrow)
+                raw_today = state.attributes.get("raw_today") or []
+                raw_tomorrow = state.attributes.get("raw_tomorrow") or []
+                all_raw_prices = raw_today + raw_tomorrow
+                _LOGGER.debug("Using Energi Data Service format")
+
+            if not all_raw_prices:
+                _LOGGER.error("No price data available from sensor %s", self.price_sensor)
                 self._status = STATUS_ERROR
                 self._notify_listeners()
                 return False
 
-            _LOGGER.debug("Got %d price entries", len(all_prices))
+            # Parse prices into unified format
+            all_prices = _parse_price_data(all_raw_prices)
+
+            if not all_prices:
+                _LOGGER.error("Could not parse any price data")
+                self._status = STATUS_ERROR
+                self._notify_listeners()
+                return False
+
+            _LOGGER.debug("Got %d parsed price entries", len(all_prices))
 
             # Run optimization
             result = self._optimizer.optimize(

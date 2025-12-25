@@ -20,7 +20,8 @@ CONF_NIGHT_START = "night_start"
 CONF_NIGHT_END = "night_end"
 
 # Default values
-DEFAULT_PRICE_SENSOR = "sensor.energi_data_service"
+DEFAULT_PRICE_SENSOR = "sensor.stromligning_current_price_vat"
+DEFAULT_TOMORROW_PRICE_SENSOR = "binary_sensor.stromligning_tomorrow_spotprice_vat"
 DEFAULT_DISCHARGE_POWER_ENTITY = "number.battery_maximum_discharging_power"
 DEFAULT_BATTERY_CAPACITY = 10.0  # kWh
 DEFAULT_CHARGE_POWER = 2500  # W
