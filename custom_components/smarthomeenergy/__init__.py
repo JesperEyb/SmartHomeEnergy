@@ -308,25 +308,34 @@ class SmartChargeCoordinator:
             _LOGGER.debug("Update: hour=%s, is_night=%s, mode=%s, charge_hours=%s, discharge_hours=%s",
                          current_hour, is_night, old_mode, self._cheapest_charge_hours, self._expensive_discharge_hours)
 
+            new_mode = None
+            target_discharge_power = None
+
             if is_night and current_hour in self._cheapest_charge_hours:
-                if self._current_mode != "charging":
+                new_mode = "charging"
+                if self._current_mode != new_mode:
                     _LOGGER.info("Starting force charge - cheapest hour %s", current_hour)
                     await self._start_force_charge()
-                self._current_mode = "charging"
 
             elif not is_night and current_hour in self._expensive_discharge_hours:
-                if self._current_mode != "discharge_allowed":
+                new_mode = "discharge_allowed"
+                target_discharge_power = self.max_discharge_power
+                if self._current_mode != new_mode:
                     _LOGGER.info("Allowing discharge - expensive hour %s", current_hour)
                     await self._stop_force_charge()
-                    await self._set_discharge_power(self.max_discharge_power)
-                self._current_mode = "discharge_allowed"
 
             else:
-                if self._current_mode != "discharge_blocked":
+                new_mode = "discharge_blocked"
+                target_discharge_power = 0
+                if self._current_mode != new_mode:
                     _LOGGER.info("Blocking discharge - hour %s", current_hour)
                     await self._stop_force_charge()
-                    await self._set_discharge_power(0)
-                self._current_mode = "discharge_blocked"
+
+            # Always set discharge power to ensure correct state
+            if target_discharge_power is not None:
+                await self._set_discharge_power(target_discharge_power)
+
+            self._current_mode = new_mode
 
             if old_mode != self._current_mode:
                 self._notify_listeners()
