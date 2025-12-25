@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_time_interval, async_track_time_change
 
 from .const import (
     DOMAIN,
@@ -33,7 +33,17 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.BUTTON]
+
+
+def _get_int(value: Any, default: int) -> int:
+    """Safely get an integer value."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -65,9 +75,11 @@ class SmartChargeCoordinator:
         self.hass = hass
         self.entry = entry
         self._unsub_timer = None
+        self._unsub_midnight = None
         self._cheapest_charge_hours: list[int] = []
         self._expensive_discharge_hours: list[int] = []
         self._all_prices: list[dict] = []
+        self._hourly_plan: list[dict] = []
         self._current_mode = "idle"
         self._enabled = True
         self._listeners: list[callable] = []
@@ -87,27 +99,33 @@ class SmartChargeCoordinator:
 
     @property
     def num_charge_hours(self) -> int:
-        return self.entry.data.get(CONF_CHEAPEST_CHARGE_HOURS, DEFAULT_CHEAPEST_CHARGE_HOURS)
+        return _get_int(self.entry.options.get(CONF_CHEAPEST_CHARGE_HOURS,
+                       self.entry.data.get(CONF_CHEAPEST_CHARGE_HOURS)), DEFAULT_CHEAPEST_CHARGE_HOURS)
 
     @property
     def num_discharge_hours(self) -> int:
-        return self.entry.data.get(CONF_EXPENSIVE_DISCHARGE_HOURS, DEFAULT_EXPENSIVE_DISCHARGE_HOURS)
+        return _get_int(self.entry.options.get(CONF_EXPENSIVE_DISCHARGE_HOURS,
+                       self.entry.data.get(CONF_EXPENSIVE_DISCHARGE_HOURS)), DEFAULT_EXPENSIVE_DISCHARGE_HOURS)
 
     @property
     def night_start(self) -> int:
-        return self.entry.data.get(CONF_NIGHT_START, DEFAULT_NIGHT_START)
+        return _get_int(self.entry.options.get(CONF_NIGHT_START,
+                       self.entry.data.get(CONF_NIGHT_START)), DEFAULT_NIGHT_START)
 
     @property
     def night_end(self) -> int:
-        return self.entry.data.get(CONF_NIGHT_END, DEFAULT_NIGHT_END)
+        return _get_int(self.entry.options.get(CONF_NIGHT_END,
+                       self.entry.data.get(CONF_NIGHT_END)), DEFAULT_NIGHT_END)
 
     @property
     def charge_power(self) -> int:
-        return self.entry.data.get(CONF_CHARGE_POWER, DEFAULT_CHARGE_POWER)
+        return _get_int(self.entry.options.get(CONF_CHARGE_POWER,
+                       self.entry.data.get(CONF_CHARGE_POWER)), DEFAULT_CHARGE_POWER)
 
     @property
     def max_discharge_power(self) -> int:
-        return self.entry.data.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
+        return _get_int(self.entry.options.get(CONF_MAX_DISCHARGE_POWER,
+                       self.entry.data.get(CONF_MAX_DISCHARGE_POWER)), DEFAULT_MAX_DISCHARGE_POWER)
 
     @property
     def cheapest_charge_hours(self) -> list[int]:
@@ -120,6 +138,11 @@ class SmartChargeCoordinator:
     @property
     def all_prices(self) -> list[dict]:
         return self._all_prices
+
+    @property
+    def hourly_plan(self) -> list[dict]:
+        """Return hourly plan for display."""
+        return self._hourly_plan
 
     @property
     def current_mode(self) -> str:
@@ -143,15 +166,42 @@ class SmartChargeCoordinator:
             listener()
 
     async def async_start(self) -> None:
+        """Start the coordinator."""
+        await self._async_scan_prices()
         await self._async_update()
+
+        # Update every minute
         self._unsub_timer = async_track_time_interval(
             self.hass, self._async_update, timedelta(minutes=1)
         )
 
+        # Scan prices at midnight
+        self._unsub_midnight = async_track_time_change(
+            self.hass, self._async_midnight_scan, hour=0, minute=5, second=0
+        )
+
     async def async_stop(self) -> None:
+        """Stop the coordinator."""
         if self._unsub_timer:
             self._unsub_timer()
             self._unsub_timer = None
+        if self._unsub_midnight:
+            self._unsub_midnight()
+            self._unsub_midnight = None
+
+    async def async_scan_and_plan(self) -> None:
+        """Manual scan and plan recalculation - called by button."""
+        _LOGGER.info("Manual scan triggered")
+        await self._async_scan_prices()
+        await self._async_update()
+        self._notify_listeners()
+
+    async def _async_midnight_scan(self, now: datetime) -> None:
+        """Scan at midnight."""
+        _LOGGER.info("Midnight scan triggered")
+        await self._async_scan_prices()
+        await self._async_update()
+        self._notify_listeners()
 
     def _is_in_night_period(self, hour: int) -> bool:
         """Check if hour is in night period."""
@@ -160,11 +210,8 @@ class SmartChargeCoordinator:
         else:
             return hour >= self.night_start or hour < self.night_end
 
-    async def _async_update(self, now: datetime | None = None) -> None:
-        """Update and control battery."""
-        if not self._enabled:
-            return
-
+    async def _async_scan_prices(self) -> None:
+        """Scan prices and build plan."""
         try:
             state = self.hass.states.get(self.price_sensor)
             if state is None:
@@ -185,8 +232,6 @@ class SmartChargeCoordinator:
                         all_prices.append({"hour": hour_dt, "price": price})
 
             self._all_prices = all_prices
-            current_hour = datetime.now().hour
-            old_mode = self._current_mode
 
             # Find cheapest night hours
             night_prices = [p for p in all_prices if self._is_in_night_period(p["hour"].hour)]
@@ -197,6 +242,47 @@ class SmartChargeCoordinator:
             day_prices = [p for p in all_prices if self.night_end <= p["hour"].hour < 24]
             day_prices.sort(key=lambda x: x["price"], reverse=True)
             self._expensive_discharge_hours = [p["hour"].hour for p in day_prices[:self.num_discharge_hours]]
+
+            # Build hourly plan for display
+            self._hourly_plan = []
+            today = datetime.now().date()
+            for hour in range(24):
+                action = "blocked"
+                if self._is_in_night_period(hour):
+                    if hour in self._cheapest_charge_hours:
+                        action = "charge"
+                    else:
+                        action = "night_idle"
+                elif hour in self._expensive_discharge_hours:
+                    action = "discharge"
+
+                # Find price for this hour
+                price = None
+                for p in all_prices:
+                    if p["hour"].hour == hour and p["hour"].date() == today:
+                        price = p["price"]
+                        break
+
+                self._hourly_plan.append({
+                    "hour": hour,
+                    "action": action,
+                    "price": price,
+                })
+
+            _LOGGER.info("Plan updated: charge=%s, discharge=%s",
+                        self._cheapest_charge_hours, self._expensive_discharge_hours)
+
+        except Exception as e:
+            _LOGGER.error("Error scanning prices: %s", e)
+
+    async def _async_update(self, now: datetime | None = None) -> None:
+        """Update and control battery."""
+        if not self._enabled:
+            return
+
+        try:
+            current_hour = datetime.now().hour
+            old_mode = self._current_mode
 
             # Control logic
             is_night = self._is_in_night_period(current_hour)

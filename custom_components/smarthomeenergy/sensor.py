@@ -24,6 +24,7 @@ async def async_setup_entry(
         SmartHomeEnergyChargePlanSensor(coordinator, entry),
         SmartHomeEnergyDischargePlanSensor(coordinator, entry),
         SmartHomeEnergyNextActionSensor(coordinator, entry),
+        SmartHomeEnergyHourlyPlanSensor(coordinator, entry),
     ])
 
 
@@ -96,7 +97,7 @@ class SmartHomeEnergyChargePlanSensor(SmartHomeEnergyBaseSensor):
         hours = sorted(self._coordinator.cheapest_charge_hours)
         if not hours:
             return "Ingen plan"
-        return ", ".join(f"{h:02d}:00" for h in hours)
+        return ", ".join(f"{int(h):02d}:00" for h in hours)
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -106,8 +107,8 @@ class SmartHomeEnergyChargePlanSensor(SmartHomeEnergyBaseSensor):
         return {
             "charge_hours": hours,
             "is_charge_hour": current_hour in hours,
-            "night_start": f"{self._coordinator.night_start:02d}:00",
-            "night_end": f"{self._coordinator.night_end:02d}:00",
+            "night_start": f"{int(self._coordinator.night_start):02d}:00",
+            "night_end": f"{int(self._coordinator.night_end):02d}:00",
             "charge_power": self._coordinator.charge_power,
         }
 
@@ -126,7 +127,7 @@ class SmartHomeEnergyDischargePlanSensor(SmartHomeEnergyBaseSensor):
         hours = sorted(self._coordinator.expensive_discharge_hours)
         if not hours:
             return "Ingen plan"
-        return ", ".join(f"{h:02d}:00" for h in hours)
+        return ", ".join(f"{int(h):02d}:00" for h in hours)
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -139,7 +140,7 @@ class SmartHomeEnergyDischargePlanSensor(SmartHomeEnergyBaseSensor):
         for p in self._coordinator.all_prices:
             hour = p["hour"].hour
             price_plan.append({
-                "hour": f"{hour:02d}:00",
+                "hour": f"{int(hour):02d}:00",
                 "price": round(p["price"], 2),
                 "is_charge": hour in self._coordinator.cheapest_charge_hours,
                 "is_discharge": hour in self._coordinator.expensive_discharge_hours,
@@ -171,14 +172,14 @@ class SmartHomeEnergyNextActionSensor(SmartHomeEnergyBaseSensor):
         # Find next action
         for h in range(current_hour + 1, 24):
             if h in charge_hours:
-                return f"Opladning kl. {h:02d}:00"
+                return f"Opladning kl. {int(h):02d}:00"
             if h in discharge_hours:
-                return f"Afladning kl. {h:02d}:00"
+                return f"Afladning kl. {int(h):02d}:00"
 
         # Check tomorrow's charge hours
         for h in charge_hours:
             if h < current_hour:
-                return f"Opladning kl. {h:02d}:00 (i morgen)"
+                return f"Opladning kl. {int(h):02d}:00 (i morgen)"
 
         return "Ingen planlagt"
 
@@ -187,4 +188,59 @@ class SmartHomeEnergyNextActionSensor(SmartHomeEnergyBaseSensor):
         """Return extra attributes."""
         return {
             "current_mode": self._coordinator.current_mode,
+        }
+
+
+class SmartHomeEnergyHourlyPlanSensor(SmartHomeEnergyBaseSensor):
+    """Sensor showing hourly plan for the day."""
+
+    def __init__(self, coordinator, entry: ConfigEntry) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, entry, "Dagsplan", "hourly_plan")
+        self._attr_icon = "mdi:calendar-clock"
+
+    @property
+    def native_value(self) -> str:
+        """Return summary of the day plan."""
+        plan = self._coordinator.hourly_plan
+        if not plan:
+            return "Ingen plan"
+
+        charge_count = sum(1 for p in plan if p["action"] == "charge")
+        discharge_count = sum(1 for p in plan if p["action"] == "discharge")
+        return f"{charge_count} opladningstimer, {discharge_count} afladningstimer"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the full hourly plan."""
+        plan = self._coordinator.hourly_plan
+        current_hour = datetime.now().hour
+
+        # Format plan for display
+        formatted_plan = []
+        for entry in plan:
+            hour = entry["hour"]
+            action = entry["action"]
+            price = entry["price"]
+
+            action_text = {
+                "charge": "Opladning",
+                "discharge": "Afladning",
+                "blocked": "Blokeret",
+                "night_idle": "Nat (idle)",
+            }.get(action, action)
+
+            formatted_plan.append({
+                "time": f"{int(hour):02d}:00",
+                "action": action_text,
+                "action_raw": action,
+                "price": round(price, 2) if price else None,
+                "is_current": hour == current_hour,
+            })
+
+        return {
+            "hourly_plan": formatted_plan,
+            "current_hour": current_hour,
+            "charge_hours": sorted(self._coordinator.cheapest_charge_hours),
+            "discharge_hours": sorted(self._coordinator.expensive_discharge_hours),
         }
