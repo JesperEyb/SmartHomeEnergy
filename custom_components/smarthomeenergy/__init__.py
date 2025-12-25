@@ -335,8 +335,18 @@ class SmartChargeCoordinator:
         """Start the coordinator."""
         _LOGGER.info("SmartHomeEnergy starting...")
 
-        # Run initial optimization
-        await self.async_run_optimization()
+        # Wait for other integrations to load
+        import asyncio
+        await asyncio.sleep(30)
+        _LOGGER.debug("Initial delay complete, starting optimization")
+
+        # Run initial optimization with retry
+        for attempt in range(3):
+            success = await self.async_run_optimization()
+            if success:
+                break
+            _LOGGER.warning("Optimization attempt %d failed, retrying in 30s...", attempt + 1)
+            await asyncio.sleep(30)
 
         # Update every minute to execute plan
         self._unsub_timer = async_track_time_interval(
@@ -385,10 +395,15 @@ class SmartChargeCoordinator:
 
             all_raw_prices = []
 
+            # Log available attributes for debugging
+            _LOGGER.debug("Price sensor attributes: %s", list(state.attributes.keys()))
+
             # Try Strømligning format first (prices attribute)
             prices_attr = state.attributes.get("prices")
             if prices_attr:
-                _LOGGER.debug("Using Strømligning format (prices attribute)")
+                _LOGGER.debug("Using Strømligning format (prices attribute), got %d prices", len(prices_attr))
+                if prices_attr:
+                    _LOGGER.debug("First price entry: %s", prices_attr[0])
                 all_raw_prices.extend(prices_attr)
 
                 # Get tomorrow's prices from binary sensor
