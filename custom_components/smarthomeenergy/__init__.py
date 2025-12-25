@@ -218,8 +218,8 @@ class SmartChargeCoordinator:
                 _LOGGER.warning("Price sensor %s not found", self.price_sensor)
                 return
 
-            raw_today = state.attributes.get("raw_today", [])
-            raw_tomorrow = state.attributes.get("raw_tomorrow", [])
+            raw_today = state.attributes.get("raw_today") or []
+            raw_tomorrow = state.attributes.get("raw_tomorrow") or []
 
             all_prices = []
             for price_data in raw_today + raw_tomorrow:
