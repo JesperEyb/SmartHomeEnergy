@@ -291,6 +291,7 @@ class SmartChargeCoordinator:
     async def _async_update(self, now: datetime | None = None) -> None:
         """Update and control battery."""
         if not self._enabled:
+            _LOGGER.debug("Update skipped - not enabled")
             return
 
         try:
@@ -299,6 +300,8 @@ class SmartChargeCoordinator:
 
             # Control logic
             is_night = self._is_in_night_period(current_hour)
+            _LOGGER.debug("Update: hour=%s, is_night=%s, mode=%s, charge_hours=%s, discharge_hours=%s",
+                         current_hour, is_night, old_mode, self._cheapest_charge_hours, self._expensive_discharge_hours)
 
             if is_night and current_hour in self._cheapest_charge_hours:
                 if self._current_mode != "charging":
@@ -360,6 +363,7 @@ class SmartChargeCoordinator:
 
     async def _set_discharge_power(self, power: int) -> None:
         """Set maximum discharge power."""
+        _LOGGER.info("Setting discharge power to %s on %s", power, self.discharge_power_entity)
         try:
             await self.hass.services.async_call(
                 "number",
@@ -369,5 +373,6 @@ class SmartChargeCoordinator:
                     "value": power,
                 }
             )
+            _LOGGER.info("Discharge power set successfully")
         except Exception as e:
             _LOGGER.error("Failed to set discharge power: %s", e)
