@@ -1,0 +1,3 @@
+optimize:
+  name: Optimize
+  description: Run the battery optimization algorithm and generate a new plan based on current electricity prices.

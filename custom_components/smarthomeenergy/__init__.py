@@ -1,13 +1,16 @@
-"""SmartHomeEnergy - Smart battery charging based on electricity prices."""
+"""SmartHomeEnergy - Smart battery optimization based on electricity prices."""
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval, async_track_time_change
 
 from .const import (
@@ -15,21 +18,28 @@ from .const import (
     CONF_PRICE_SENSOR,
     CONF_BATTERY_DEVICE_ID,
     CONF_DISCHARGE_POWER_ENTITY,
-    CONF_CHEAPEST_CHARGE_HOURS,
-    CONF_EXPENSIVE_DISCHARGE_HOURS,
-    CONF_NIGHT_START,
-    CONF_NIGHT_END,
+    CONF_BATTERY_CAPACITY,
     CONF_CHARGE_POWER,
     CONF_MAX_DISCHARGE_POWER,
+    CONF_BATTERY_EFFICIENCY,
+    CONF_MIN_SOC,
+    CONF_MAX_SOC,
     DEFAULT_PRICE_SENSOR,
     DEFAULT_DISCHARGE_POWER_ENTITY,
-    DEFAULT_CHEAPEST_CHARGE_HOURS,
-    DEFAULT_EXPENSIVE_DISCHARGE_HOURS,
-    DEFAULT_NIGHT_START,
-    DEFAULT_NIGHT_END,
+    DEFAULT_BATTERY_CAPACITY,
     DEFAULT_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    DEFAULT_BATTERY_EFFICIENCY,
+    DEFAULT_MIN_SOC,
+    DEFAULT_MAX_SOC,
+    SERVICE_OPTIMIZE,
+    STATUS_IDLE,
+    STATUS_OPTIMIZING,
+    STATUS_READY,
+    STATUS_EXECUTING,
+    STATUS_ERROR,
 )
+from .optimizer import BatteryOptimizer, BatteryAction, OptimizationResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +56,16 @@ def _get_int(value: Any, default: int) -> int:
         return default
 
 
+def _get_float(value: Any, default: float) -> float:
+    """Safely get a float value."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SmartHomeEnergy from a config entry."""
     hass.data.setdefault(DOMAIN, {})
@@ -56,6 +76,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await coordinator.async_start()
 
+    # Register services
+    async def handle_optimize(call: ServiceCall) -> None:
+        """Handle optimize service call."""
+        await coordinator.async_run_optimization()
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_OPTIMIZE,
+        handle_optimize,
+        schema=vol.Schema({}),
+    )
+
     return True
 
 
@@ -64,27 +96,45 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         coordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_stop()
+
+    # Remove services if no more entries
+    if not hass.data[DOMAIN]:
+        hass.services.async_remove(DOMAIN, SERVICE_OPTIMIZE)
+
     return unload_ok
 
 
 class SmartChargeCoordinator:
-    """Coordinator for smart battery charging/discharging."""
+    """Coordinator for smart battery charging/discharging with optimization."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
         self.hass = hass
         self.entry = entry
         self._unsub_timer = None
+        self._unsub_hourly = None
         self._unsub_midnight = None
-        self._cheapest_charge_hours: list[int] = []
-        self._expensive_discharge_hours: list[int] = []
-        self._all_prices: list[dict] = []
-        self._hourly_plan: list[dict] = []
-        self._current_mode = "idle"
+
+        # State
         self._enabled = True
+        self._status = STATUS_IDLE
+        self._current_action = BatteryAction.IDLE
+        self._optimization_result: OptimizationResult | None = None
+        self._last_optimization: datetime | None = None
         self._listeners: list[callable] = []
         self._is_force_charging = False
 
+        # Initialize optimizer
+        self._optimizer = BatteryOptimizer(
+            battery_capacity_kwh=self.battery_capacity,
+            max_charge_power_w=self.charge_power,
+            max_discharge_power_w=self.max_discharge_power,
+            battery_efficiency=self.battery_efficiency / 100.0,
+            min_soc_percent=self.min_soc,
+            max_soc_percent=self.max_soc,
+        )
+
+    # Configuration properties
     @property
     def price_sensor(self) -> str:
         return self.entry.data.get(CONF_PRICE_SENSOR, DEFAULT_PRICE_SENSOR)
@@ -98,56 +148,54 @@ class SmartChargeCoordinator:
         return self.entry.data.get(CONF_DISCHARGE_POWER_ENTITY, DEFAULT_DISCHARGE_POWER_ENTITY)
 
     @property
-    def num_charge_hours(self) -> int:
-        return _get_int(self.entry.options.get(CONF_CHEAPEST_CHARGE_HOURS,
-                       self.entry.data.get(CONF_CHEAPEST_CHARGE_HOURS)), DEFAULT_CHEAPEST_CHARGE_HOURS)
-
-    @property
-    def num_discharge_hours(self) -> int:
-        return _get_int(self.entry.options.get(CONF_EXPENSIVE_DISCHARGE_HOURS,
-                       self.entry.data.get(CONF_EXPENSIVE_DISCHARGE_HOURS)), DEFAULT_EXPENSIVE_DISCHARGE_HOURS)
-
-    @property
-    def night_start(self) -> int:
-        return _get_int(self.entry.options.get(CONF_NIGHT_START,
-                       self.entry.data.get(CONF_NIGHT_START)), DEFAULT_NIGHT_START)
-
-    @property
-    def night_end(self) -> int:
-        return _get_int(self.entry.options.get(CONF_NIGHT_END,
-                       self.entry.data.get(CONF_NIGHT_END)), DEFAULT_NIGHT_END)
+    def battery_capacity(self) -> float:
+        return _get_float(
+            self.entry.options.get(CONF_BATTERY_CAPACITY,
+                                   self.entry.data.get(CONF_BATTERY_CAPACITY)),
+            DEFAULT_BATTERY_CAPACITY
+        )
 
     @property
     def charge_power(self) -> int:
-        return _get_int(self.entry.options.get(CONF_CHARGE_POWER,
-                       self.entry.data.get(CONF_CHARGE_POWER)), DEFAULT_CHARGE_POWER)
+        return _get_int(
+            self.entry.options.get(CONF_CHARGE_POWER,
+                                   self.entry.data.get(CONF_CHARGE_POWER)),
+            DEFAULT_CHARGE_POWER
+        )
 
     @property
     def max_discharge_power(self) -> int:
-        return _get_int(self.entry.options.get(CONF_MAX_DISCHARGE_POWER,
-                       self.entry.data.get(CONF_MAX_DISCHARGE_POWER)), DEFAULT_MAX_DISCHARGE_POWER)
+        return _get_int(
+            self.entry.options.get(CONF_MAX_DISCHARGE_POWER,
+                                   self.entry.data.get(CONF_MAX_DISCHARGE_POWER)),
+            DEFAULT_MAX_DISCHARGE_POWER
+        )
 
     @property
-    def cheapest_charge_hours(self) -> list[int]:
-        return self._cheapest_charge_hours
+    def battery_efficiency(self) -> int:
+        return _get_int(
+            self.entry.options.get(CONF_BATTERY_EFFICIENCY,
+                                   self.entry.data.get(CONF_BATTERY_EFFICIENCY)),
+            DEFAULT_BATTERY_EFFICIENCY
+        )
 
     @property
-    def expensive_discharge_hours(self) -> list[int]:
-        return self._expensive_discharge_hours
+    def min_soc(self) -> int:
+        return _get_int(
+            self.entry.options.get(CONF_MIN_SOC,
+                                   self.entry.data.get(CONF_MIN_SOC)),
+            DEFAULT_MIN_SOC
+        )
 
     @property
-    def all_prices(self) -> list[dict]:
-        return self._all_prices
+    def max_soc(self) -> int:
+        return _get_int(
+            self.entry.options.get(CONF_MAX_SOC,
+                                   self.entry.data.get(CONF_MAX_SOC)),
+            DEFAULT_MAX_SOC
+        )
 
-    @property
-    def hourly_plan(self) -> list[dict]:
-        """Return hourly plan for display."""
-        return self._hourly_plan
-
-    @property
-    def current_mode(self) -> str:
-        return self._current_mode
-
+    # State properties
     @property
     def enabled(self) -> bool:
         return self._enabled
@@ -157,198 +205,234 @@ class SmartChargeCoordinator:
         self._enabled = value
         self._notify_listeners()
 
+    @property
+    def status(self) -> str:
+        return self._status
+
+    @property
+    def current_action(self) -> BatteryAction:
+        return self._current_action
+
+    @property
+    def optimization_result(self) -> OptimizationResult | None:
+        return self._optimization_result
+
+    @property
+    def last_optimization(self) -> datetime | None:
+        return self._last_optimization
+
+    @property
+    def hourly_plan(self) -> list[dict]:
+        """Get hourly plan as list of dicts for sensor attributes."""
+        if not self._optimization_result or not self._optimization_result.success:
+            return []
+        return [h.to_dict() for h in self._optimization_result.hourly_plan]
+
+    @property
+    def current_hour_plan(self) -> dict | None:
+        """Get plan for current hour."""
+        if not self._optimization_result or not self._optimization_result.success:
+            return None
+
+        current_hour = datetime.now().hour
+        for plan in self._optimization_result.hourly_plan:
+            if plan.hour == current_hour:
+                return plan.to_dict()
+        return None
+
+    @property
+    def next_action_plan(self) -> dict | None:
+        """Get next non-idle action."""
+        if not self._optimization_result or not self._optimization_result.success:
+            return None
+
+        current_hour = datetime.now().hour
+        for plan in self._optimization_result.hourly_plan:
+            if plan.hour > current_hour and plan.action != BatteryAction.IDLE:
+                return plan.to_dict()
+        return None
+
+    # Listener management
     def add_listener(self, callback: callable) -> callable:
         self._listeners.append(callback)
         return lambda: self._listeners.remove(callback)
 
     def _notify_listeners(self) -> None:
         for listener in self._listeners:
-            listener()
+            try:
+                listener()
+            except Exception as e:
+                _LOGGER.error("Error notifying listener: %s", e)
 
+    # Lifecycle
     async def async_start(self) -> None:
         """Start the coordinator."""
-        await self._async_scan_prices()
-        await self._async_update()
+        _LOGGER.info("SmartHomeEnergy starting...")
 
-        # Update every minute
+        # Run initial optimization
+        await self.async_run_optimization()
+
+        # Update every minute to execute plan
         self._unsub_timer = async_track_time_interval(
-            self.hass, self._async_update, timedelta(minutes=1)
+            self.hass, self._async_execute_plan, timedelta(minutes=1)
         )
 
-        # Scan prices at midnight
-        self._unsub_midnight = async_track_time_change(
-            self.hass, self._async_midnight_scan, hour=0, minute=5, second=0
+        # Re-optimize at the start of each hour
+        self._unsub_hourly = async_track_time_change(
+            self.hass, self._async_hourly_update, minute=1, second=0
         )
+
+        # Full re-optimization at midnight
+        self._unsub_midnight = async_track_time_change(
+            self.hass, self._async_midnight_optimization, hour=0, minute=5, second=0
+        )
+
+        _LOGGER.info("SmartHomeEnergy started successfully")
 
     async def async_stop(self) -> None:
         """Stop the coordinator."""
         if self._unsub_timer:
             self._unsub_timer()
             self._unsub_timer = None
+        if self._unsub_hourly:
+            self._unsub_hourly()
+            self._unsub_hourly = None
         if self._unsub_midnight:
             self._unsub_midnight()
             self._unsub_midnight = None
 
-    async def async_scan_and_plan(self) -> None:
-        """Manual scan and plan recalculation - called by button."""
-        _LOGGER.info("Manual scan triggered")
-        await self._async_scan_prices()
-        await self._async_update()
+    # Optimization
+    async def async_run_optimization(self) -> bool:
+        """Run the optimization algorithm."""
+        _LOGGER.info("Starting optimization...")
+        self._status = STATUS_OPTIMIZING
         self._notify_listeners()
 
-    async def _async_midnight_scan(self, now: datetime) -> None:
-        """Scan at midnight."""
-        _LOGGER.info("Midnight scan triggered")
-        await self._async_scan_prices()
-        await self._async_update()
-        self._notify_listeners()
-
-    def _is_in_night_period(self, hour: int) -> bool:
-        """Check if hour is in night period."""
-        if self.night_start <= self.night_end:
-            return self.night_start <= hour < self.night_end
-        else:
-            return hour >= self.night_start or hour < self.night_end
-
-    async def _async_scan_prices(self) -> None:
-        """Scan prices and build plan."""
         try:
+            # Get price data
             state = self.hass.states.get(self.price_sensor)
             if state is None:
-                _LOGGER.warning("Price sensor %s not found", self.price_sensor)
-                return
+                _LOGGER.error("Price sensor %s not found", self.price_sensor)
+                self._status = STATUS_ERROR
+                self._notify_listeners()
+                return False
 
             raw_today = state.attributes.get("raw_today") or []
             raw_tomorrow = state.attributes.get("raw_tomorrow") or []
+            all_prices = raw_today + raw_tomorrow
 
-            _LOGGER.debug("raw_today type: %s, length: %s", type(raw_today), len(raw_today) if raw_today else 0)
-            if raw_today:
-                _LOGGER.debug("First raw_today item: %s (type: %s)", raw_today[0], type(raw_today[0]))
+            if not all_prices:
+                _LOGGER.error("No price data available")
+                self._status = STATUS_ERROR
+                self._notify_listeners()
+                return False
 
-            all_prices = []
-            for price_data in raw_today + raw_tomorrow:
-                if isinstance(price_data, dict):
-                    hour_dt = price_data.get("hour") or price_data.get("start")
-                    price = price_data.get("price") or price_data.get("value")
-                    if hour_dt and price is not None:
-                        if isinstance(hour_dt, str):
-                            hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
-                        all_prices.append({"hour": hour_dt, "price": price})
-                elif hasattr(price_data, "hour") and hasattr(price_data, "price"):
-                    # Handle named tuple or object-like data
-                    hour_dt = price_data.hour
-                    price = price_data.price
-                    if isinstance(hour_dt, str):
-                        hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
-                    all_prices.append({"hour": hour_dt, "price": price})
+            _LOGGER.debug("Got %d price entries", len(all_prices))
 
-            _LOGGER.debug("Parsed %s prices", len(all_prices))
+            # Run optimization
+            result = self._optimizer.optimize(
+                prices=all_prices,
+                current_soc_kwh=0.0,  # TODO: Get actual SOC from battery sensor
+            )
 
-            self._all_prices = all_prices
+            if result.success:
+                self._optimization_result = result
+                self._last_optimization = datetime.now()
+                self._status = STATUS_READY
 
-            # Find cheapest night hours
-            night_prices = [p for p in all_prices if self._is_in_night_period(p["hour"].hour)]
-            night_prices.sort(key=lambda x: x["price"])
-            self._cheapest_charge_hours = [p["hour"].hour for p in night_prices[:self.num_charge_hours]]
+                # Log the plan
+                charge_hours = [p.hour for p in result.hourly_plan if p.action == BatteryAction.CHARGE]
+                discharge_hours = [p.hour for p in result.hourly_plan if p.action == BatteryAction.DISCHARGE]
+                _LOGGER.info(
+                    "Optimization complete: charge_hours=%s, discharge_hours=%s, net_benefit=%.2f DKK",
+                    charge_hours, discharge_hours, result.net_benefit
+                )
+            else:
+                _LOGGER.error("Optimization failed: %s", result.error_message)
+                self._status = STATUS_ERROR
 
-            # Find most expensive day hours (from night_end to midnight)
-            day_prices = [p for p in all_prices if self.night_end <= p["hour"].hour < 24]
-            day_prices.sort(key=lambda x: x["price"], reverse=True)
-            self._expensive_discharge_hours = [p["hour"].hour for p in day_prices[:self.num_discharge_hours]]
-
-            # Build hourly plan for display
-            self._hourly_plan = []
-            today = datetime.now().date()
-            for hour in range(24):
-                action = "blocked"
-                if self._is_in_night_period(hour):
-                    if hour in self._cheapest_charge_hours:
-                        action = "charge"
-                    else:
-                        action = "night_idle"
-                elif hour in self._expensive_discharge_hours:
-                    action = "discharge"
-
-                # Find price for this hour
-                price = None
-                for p in all_prices:
-                    if p["hour"].hour == hour and p["hour"].date() == today:
-                        price = p["price"]
-                        break
-
-                self._hourly_plan.append({
-                    "hour": hour,
-                    "action": action,
-                    "price": price,
-                })
-
-            _LOGGER.info("Plan updated: charge=%s, discharge=%s",
-                        self._cheapest_charge_hours, self._expensive_discharge_hours)
+            self._notify_listeners()
+            return result.success
 
         except Exception as e:
-            _LOGGER.error("Error scanning prices: %s", e)
+            _LOGGER.error("Optimization error: %s", e)
+            self._status = STATUS_ERROR
+            self._notify_listeners()
+            return False
 
-    async def _async_update(self, now: datetime | None = None) -> None:
-        """Update and control battery."""
+    async def _async_hourly_update(self, now: datetime) -> None:
+        """Called at the start of each hour."""
+        _LOGGER.debug("Hourly update at %s", now)
+        # Re-run optimization if we're past noon and have tomorrow's prices
+        if now.hour >= 13:
+            await self.async_run_optimization()
+
+    async def _async_midnight_optimization(self, now: datetime) -> None:
+        """Called at midnight for daily optimization."""
+        _LOGGER.info("Midnight optimization triggered")
+        await self.async_run_optimization()
+
+    # Plan execution
+    async def _async_execute_plan(self, now: datetime | None = None) -> None:
+        """Execute the current plan."""
         if not self._enabled:
-            _LOGGER.debug("Update skipped - not enabled")
+            _LOGGER.debug("Execution skipped - not enabled")
             return
 
+        if not self._optimization_result or not self._optimization_result.success:
+            _LOGGER.debug("Execution skipped - no valid plan")
+            return
+
+        self._status = STATUS_EXECUTING
+        current_hour = datetime.now().hour
+
+        # Find action for current hour
+        action, plan = self._optimizer.get_action_for_hour(
+            self._optimization_result, current_hour
+        )
+
+        _LOGGER.debug(
+            "Executing plan: hour=%d, action=%s, current_action=%s",
+            current_hour, action.value, self._current_action.value
+        )
+
         try:
-            # If we don't have prices yet, try to scan
-            if not self._all_prices:
-                _LOGGER.debug("No prices loaded, scanning...")
-                await self._async_scan_prices()
-
-            current_hour = datetime.now().hour
-            old_mode = self._current_mode
-
-            # Control logic
-            is_night = self._is_in_night_period(current_hour)
-            _LOGGER.debug("Update: hour=%s, is_night=%s, mode=%s, charge_hours=%s, discharge_hours=%s",
-                         current_hour, is_night, old_mode, self._cheapest_charge_hours, self._expensive_discharge_hours)
-
-            new_mode = None
-            target_discharge_power = None
-
-            if is_night and current_hour in self._cheapest_charge_hours:
-                new_mode = "charging"
-                if self._current_mode != new_mode:
-                    _LOGGER.info("Starting force charge - cheapest hour %s", current_hour)
+            if action == BatteryAction.CHARGE:
+                if self._current_action != BatteryAction.CHARGE:
+                    _LOGGER.info("Starting charge at hour %d", current_hour)
                     await self._start_force_charge()
+                    # Also set discharge to 0 during charging
+                    await self._set_discharge_power(0)
+                self._current_action = BatteryAction.CHARGE
 
-            elif not is_night and current_hour in self._expensive_discharge_hours:
-                new_mode = "discharge_allowed"
-                target_discharge_power = self.max_discharge_power
-                if self._current_mode != new_mode:
-                    _LOGGER.info("Allowing discharge - expensive hour %s", current_hour)
+            elif action == BatteryAction.DISCHARGE:
+                if self._current_action != BatteryAction.DISCHARGE:
+                    _LOGGER.info("Starting discharge at hour %d", current_hour)
                     await self._stop_force_charge()
+                    await self._set_discharge_power(self.max_discharge_power)
+                self._current_action = BatteryAction.DISCHARGE
 
-            else:
-                new_mode = "discharge_blocked"
-                target_discharge_power = 0
-                if self._current_mode != new_mode:
-                    _LOGGER.info("Blocking discharge - hour %s", current_hour)
+            else:  # IDLE
+                if self._current_action != BatteryAction.IDLE:
+                    _LOGGER.info("Going idle at hour %d", current_hour)
                     await self._stop_force_charge()
+                    await self._set_discharge_power(0)
+                self._current_action = BatteryAction.IDLE
 
-            # Always set discharge power to ensure correct state
-            if target_discharge_power is not None:
-                await self._set_discharge_power(target_discharge_power)
-
-            self._current_mode = new_mode
-
-            if old_mode != self._current_mode:
-                self._notify_listeners()
+            self._notify_listeners()
 
         except Exception as e:
-            _LOGGER.error("Error updating smart charge: %s", e)
+            _LOGGER.error("Error executing plan: %s", e)
 
+    # Battery control
     async def _start_force_charge(self) -> None:
         """Start force charging the battery."""
         if not self.battery_device_id:
             _LOGGER.warning("No battery device ID configured")
             return
+
         try:
+            _LOGGER.info("Calling huawei_solar.forcible_charge with power=%d", self.charge_power)
             await self.hass.services.async_call(
                 "huawei_solar",
                 "forcible_charge",
@@ -359,6 +443,7 @@ class SmartChargeCoordinator:
                 }
             )
             self._is_force_charging = True
+            _LOGGER.info("Force charge started successfully")
         except Exception as e:
             _LOGGER.error("Failed to start force charge: %s", e)
 
@@ -366,18 +451,20 @@ class SmartChargeCoordinator:
         """Stop force charging."""
         if self._is_force_charging and self.battery_device_id:
             try:
+                _LOGGER.info("Stopping force charge")
                 await self.hass.services.async_call(
                     "huawei_solar",
                     "stop_forcible_charge",
                     {"device_id": self.battery_device_id}
                 )
                 self._is_force_charging = False
+                _LOGGER.info("Force charge stopped successfully")
             except Exception as e:
                 _LOGGER.error("Failed to stop force charge: %s", e)
 
     async def _set_discharge_power(self, power: int) -> None:
         """Set maximum discharge power."""
-        _LOGGER.info("Setting discharge power to %s on %s", power, self.discharge_power_entity)
+        _LOGGER.info("Setting discharge power to %d on %s", power, self.discharge_power_entity)
         try:
             await self.hass.services.async_call(
                 "number",
@@ -387,6 +474,6 @@ class SmartChargeCoordinator:
                     "value": power,
                 }
             )
-            _LOGGER.info("Discharge power set successfully")
+            _LOGGER.info("Discharge power set to %d successfully", power)
         except Exception as e:
             _LOGGER.error("Failed to set discharge power: %s", e)

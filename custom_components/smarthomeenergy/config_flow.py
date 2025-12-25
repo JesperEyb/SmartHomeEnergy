@@ -14,20 +14,20 @@ from .const import (
     CONF_PRICE_SENSOR,
     CONF_BATTERY_DEVICE_ID,
     CONF_DISCHARGE_POWER_ENTITY,
-    CONF_CHEAPEST_CHARGE_HOURS,
-    CONF_EXPENSIVE_DISCHARGE_HOURS,
-    CONF_NIGHT_START,
-    CONF_NIGHT_END,
+    CONF_BATTERY_CAPACITY,
     CONF_CHARGE_POWER,
     CONF_MAX_DISCHARGE_POWER,
+    CONF_BATTERY_EFFICIENCY,
+    CONF_MIN_SOC,
+    CONF_MAX_SOC,
     DEFAULT_PRICE_SENSOR,
     DEFAULT_DISCHARGE_POWER_ENTITY,
-    DEFAULT_CHEAPEST_CHARGE_HOURS,
-    DEFAULT_EXPENSIVE_DISCHARGE_HOURS,
-    DEFAULT_NIGHT_START,
-    DEFAULT_NIGHT_END,
+    DEFAULT_BATTERY_CAPACITY,
     DEFAULT_CHARGE_POWER,
     DEFAULT_MAX_DISCHARGE_POWER,
+    DEFAULT_BATTERY_EFFICIENCY,
+    DEFAULT_MIN_SOC,
+    DEFAULT_MAX_SOC,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ _LOGGER = logging.getLogger(__name__)
 class SmartHomeEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SmartHomeEnergy."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Handle the initial step."""
@@ -59,23 +59,23 @@ class SmartHomeEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_DISCHARGE_POWER_ENTITY, default=DEFAULT_DISCHARGE_POWER_ENTITY): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="number")
                 ),
-                vol.Required(CONF_CHEAPEST_CHARGE_HOURS, default=DEFAULT_CHEAPEST_CHARGE_HOURS): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=6, step=1, mode="box")
-                ),
-                vol.Required(CONF_EXPENSIVE_DISCHARGE_HOURS, default=DEFAULT_EXPENSIVE_DISCHARGE_HOURS): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=12, step=1, mode="box")
-                ),
-                vol.Required(CONF_NIGHT_START, default=DEFAULT_NIGHT_START): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=0, max=23, step=1, mode="box")
-                ),
-                vol.Required(CONF_NIGHT_END, default=DEFAULT_NIGHT_END): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=0, max=23, step=1, mode="box")
+                vol.Required(CONF_BATTERY_CAPACITY, default=DEFAULT_BATTERY_CAPACITY): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=1, max=100, step=0.1, unit_of_measurement="kWh", mode="box")
                 ),
                 vol.Required(CONF_CHARGE_POWER, default=DEFAULT_CHARGE_POWER): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=500, max=10000, step=100, unit_of_measurement="W", mode="box")
                 ),
                 vol.Required(CONF_MAX_DISCHARGE_POWER, default=DEFAULT_MAX_DISCHARGE_POWER): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=500, max=10000, step=100, unit_of_measurement="W", mode="box")
+                ),
+                vol.Required(CONF_BATTERY_EFFICIENCY, default=DEFAULT_BATTERY_EFFICIENCY): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=70, max=100, step=1, unit_of_measurement="%", mode="slider")
+                ),
+                vol.Required(CONF_MIN_SOC, default=DEFAULT_MIN_SOC): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=0, max=50, step=5, unit_of_measurement="%", mode="slider")
+                ),
+                vol.Required(CONF_MAX_SOC, default=DEFAULT_MAX_SOC): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=50, max=100, step=5, unit_of_measurement="%", mode="slider")
                 ),
             }
         )
@@ -101,27 +101,46 @@ class SmartHomeEnergyOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
+        # Merge data and options for current values
         current = {**self._entry.data, **self._entry.options}
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_CHEAPEST_CHARGE_HOURS, default=current.get(CONF_CHEAPEST_CHARGE_HOURS, DEFAULT_CHEAPEST_CHARGE_HOURS)): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=6, step=1, mode="box")
+                vol.Required(
+                    CONF_BATTERY_CAPACITY,
+                    default=current.get(CONF_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=1, max=100, step=0.1, unit_of_measurement="kWh", mode="box")
                 ),
-                vol.Required(CONF_EXPENSIVE_DISCHARGE_HOURS, default=current.get(CONF_EXPENSIVE_DISCHARGE_HOURS, DEFAULT_EXPENSIVE_DISCHARGE_HOURS)): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=12, step=1, mode="box")
-                ),
-                vol.Required(CONF_NIGHT_START, default=current.get(CONF_NIGHT_START, DEFAULT_NIGHT_START)): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=0, max=23, step=1, mode="box")
-                ),
-                vol.Required(CONF_NIGHT_END, default=current.get(CONF_NIGHT_END, DEFAULT_NIGHT_END)): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=0, max=23, step=1, mode="box")
-                ),
-                vol.Required(CONF_CHARGE_POWER, default=current.get(CONF_CHARGE_POWER, DEFAULT_CHARGE_POWER)): selector.NumberSelector(
+                vol.Required(
+                    CONF_CHARGE_POWER,
+                    default=current.get(CONF_CHARGE_POWER, DEFAULT_CHARGE_POWER)
+                ): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=500, max=10000, step=100, unit_of_measurement="W", mode="box")
                 ),
-                vol.Required(CONF_MAX_DISCHARGE_POWER, default=current.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)): selector.NumberSelector(
+                vol.Required(
+                    CONF_MAX_DISCHARGE_POWER,
+                    default=current.get(CONF_MAX_DISCHARGE_POWER, DEFAULT_MAX_DISCHARGE_POWER)
+                ): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=500, max=10000, step=100, unit_of_measurement="W", mode="box")
+                ),
+                vol.Required(
+                    CONF_BATTERY_EFFICIENCY,
+                    default=current.get(CONF_BATTERY_EFFICIENCY, DEFAULT_BATTERY_EFFICIENCY)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=70, max=100, step=1, unit_of_measurement="%", mode="slider")
+                ),
+                vol.Required(
+                    CONF_MIN_SOC,
+                    default=current.get(CONF_MIN_SOC, DEFAULT_MIN_SOC)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=0, max=50, step=5, unit_of_measurement="%", mode="slider")
+                ),
+                vol.Required(
+                    CONF_MAX_SOC,
+                    default=current.get(CONF_MAX_SOC, DEFAULT_MAX_SOC)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=50, max=100, step=5, unit_of_measurement="%", mode="slider")
                 ),
             }
         )
