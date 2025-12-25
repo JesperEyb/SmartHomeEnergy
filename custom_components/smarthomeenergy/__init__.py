@@ -221,15 +221,28 @@ class SmartChargeCoordinator:
             raw_today = state.attributes.get("raw_today") or []
             raw_tomorrow = state.attributes.get("raw_tomorrow") or []
 
+            _LOGGER.debug("raw_today type: %s, length: %s", type(raw_today), len(raw_today) if raw_today else 0)
+            if raw_today:
+                _LOGGER.debug("First raw_today item: %s (type: %s)", raw_today[0], type(raw_today[0]))
+
             all_prices = []
             for price_data in raw_today + raw_tomorrow:
                 if isinstance(price_data, dict):
-                    hour_dt = price_data.get("hour")
-                    price = price_data.get("price")
+                    hour_dt = price_data.get("hour") or price_data.get("start")
+                    price = price_data.get("price") or price_data.get("value")
                     if hour_dt and price is not None:
                         if isinstance(hour_dt, str):
                             hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
                         all_prices.append({"hour": hour_dt, "price": price})
+                elif hasattr(price_data, "hour") and hasattr(price_data, "price"):
+                    # Handle named tuple or object-like data
+                    hour_dt = price_data.hour
+                    price = price_data.price
+                    if isinstance(hour_dt, str):
+                        hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
+                    all_prices.append({"hour": hour_dt, "price": price})
+
+            _LOGGER.debug("Parsed %s prices", len(all_prices))
 
             self._all_prices = all_prices
 
