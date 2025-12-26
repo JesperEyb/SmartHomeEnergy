@@ -483,10 +483,27 @@ class SmartChargeCoordinator:
             soc_state = self.hass.states.get(self.battery_soc_sensor)
             if soc_state:
                 try:
-                    # SOC is usually in % (0-100), convert to kWh
-                    soc_percent = float(soc_state.state)
-                    current_soc_kwh = (soc_percent / 100.0) * self.battery_capacity
-                    _LOGGER.debug("Battery SOC: %.1f%% = %.2f kWh", soc_percent, current_soc_kwh)
+                    soc_value = float(soc_state.state)
+
+                    # Check if SOC is already in kWh or in % (0-100)
+                    # If value is greater than battery capacity, it's likely in % (e.g., 85%)
+                    # If value is small (< 100), could be either % or kWh
+                    if soc_value > 100:
+                        # Definitely in %, convert to kWh
+                        current_soc_kwh = (soc_value / 100.0) * self.battery_capacity
+                        _LOGGER.debug("Battery SOC: %.1f%% = %.2f kWh", soc_value, current_soc_kwh)
+                    elif soc_value <= self.battery_capacity:
+                        # Could be in % (0-100) or already in kWh
+                        # Assume % and convert to kWh
+                        soc_percent = soc_value
+                        current_soc_kwh = (soc_percent / 100.0) * self.battery_capacity
+                        _LOGGER.debug("Battery SOC: %.1f%% = %.2f kWh (assumed %%, unit of measurement: %s)",
+                                     soc_percent, current_soc_kwh, soc_state.attributes.get("unit_of_measurement", "unknown"))
+                    else:
+                        # Value is larger than battery capacity, something is wrong
+                        _LOGGER.warning("SOC value %.2f is larger than battery capacity %.2f, assuming 0",
+                                       soc_value, self.battery_capacity)
+                        current_soc_kwh = 0.0
                 except (ValueError, TypeError) as e:
                     _LOGGER.warning("Could not read battery SOC from %s: %s", self.battery_soc_sensor, e)
             else:
@@ -540,9 +557,17 @@ class SmartChargeCoordinator:
                 if dt_key in sell_prices:
                     price_entry["sell_price"] = sell_prices[dt_key]
                 else:
-                    # Fallback: use buy price as sell price (self-consumption savings)
-                    price_entry["sell_price"] = price_entry["price"]
-                    _LOGGER.debug("No sell price for %s, using buy price", dt_key)
+                    # Try to find sell price for the hour (round down to hour)
+                    # This handles case where sell prices are hourly but buy prices are 15-min intervals
+                    hour_start = price_entry["start"].replace(minute=0, second=0, microsecond=0)
+                    hour_key = hour_start.isoformat()
+                    if hour_key in sell_prices:
+                        price_entry["sell_price"] = sell_prices[hour_key]
+                        _LOGGER.debug("Using hourly sell price for %s from %s", dt_key, hour_key)
+                    else:
+                        # Fallback: use buy price as sell price (self-consumption savings)
+                        price_entry["sell_price"] = price_entry["price"]
+                        _LOGGER.debug("No sell price for %s, using buy price", dt_key)
 
             # Run optimization
             result = self._optimizer.optimize(
