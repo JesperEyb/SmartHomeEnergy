@@ -26,7 +26,6 @@ from .const import (
     CONF_BATTERY_EFFICIENCY,
     CONF_MIN_SOC,
     CONF_MAX_SOC,
-    CONF_CHARGE_HOURS,
     DEFAULT_PRICE_SENSOR,
     DEFAULT_SELL_PRICE_SENSOR,
     DEFAULT_BATTERY_SOC_SENSOR,
@@ -38,7 +37,6 @@ from .const import (
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_MIN_SOC,
     DEFAULT_MAX_SOC,
-    DEFAULT_CHARGE_HOURS,
     SERVICE_OPTIMIZE,
     STATUS_IDLE,
     STATUS_OPTIMIZING,
@@ -209,23 +207,36 @@ class SmartChargeCoordinator:
     # Configuration properties
     @property
     def price_sensor(self) -> str:
-        return self.entry.data.get(CONF_PRICE_SENSOR, DEFAULT_PRICE_SENSOR)
+        return self.entry.options.get(
+            CONF_PRICE_SENSOR,
+            self.entry.data.get(CONF_PRICE_SENSOR, DEFAULT_PRICE_SENSOR)
+        )
 
     @property
     def sell_price_sensor(self) -> str:
-        return self.entry.data.get(CONF_SELL_PRICE_SENSOR, DEFAULT_SELL_PRICE_SENSOR)
+        return self.entry.options.get(
+            CONF_SELL_PRICE_SENSOR,
+            self.entry.data.get(CONF_SELL_PRICE_SENSOR, DEFAULT_SELL_PRICE_SENSOR)
+        )
 
     @property
     def battery_soc_sensor(self) -> str:
-        return self.entry.data.get(CONF_BATTERY_SOC_SENSOR, DEFAULT_BATTERY_SOC_SENSOR)
+        return self.entry.options.get(
+            CONF_BATTERY_SOC_SENSOR,
+            self.entry.data.get(CONF_BATTERY_SOC_SENSOR, DEFAULT_BATTERY_SOC_SENSOR)
+        )
 
     @property
     def battery_device_id(self) -> str:
+        # Device ID is set during initial setup and should not change
         return self.entry.data.get(CONF_BATTERY_DEVICE_ID, "")
 
     @property
     def discharge_power_entity(self) -> str:
-        return self.entry.data.get(CONF_DISCHARGE_POWER_ENTITY, DEFAULT_DISCHARGE_POWER_ENTITY)
+        return self.entry.options.get(
+            CONF_DISCHARGE_POWER_ENTITY,
+            self.entry.data.get(CONF_DISCHARGE_POWER_ENTITY, DEFAULT_DISCHARGE_POWER_ENTITY)
+        )
 
     @property
     def battery_capacity(self) -> float:
@@ -275,14 +286,6 @@ class SmartChargeCoordinator:
             DEFAULT_MAX_SOC
         )
 
-    @property
-    def charge_hours(self) -> int:
-        return _get_int(
-            self.entry.options.get(CONF_CHARGE_HOURS,
-                                   self.entry.data.get(CONF_CHARGE_HOURS)),
-            DEFAULT_CHARGE_HOURS
-        )
-
     # State properties
     @property
     def enabled(self) -> bool:
@@ -318,25 +321,34 @@ class SmartChargeCoordinator:
 
     @property
     def current_hour_plan(self) -> dict | None:
-        """Get plan for current hour."""
+        """Get plan for current 15-minute interval."""
         if not self._optimization_result or not self._optimization_result.success:
             return None
 
-        current_hour = datetime.now().hour
+        current_time = datetime.now()
+        # Round down to nearest 15 minutes
+        rounded_time = current_time.replace(
+            minute=(current_time.minute // 15) * 15,
+            second=0,
+            microsecond=0
+        )
+
         for plan in self._optimization_result.hourly_plan:
-            if plan.hour == current_hour:
+            plan_time = plan.datetime_start.replace(second=0, microsecond=0)
+            if plan_time == rounded_time:
                 return plan.to_dict()
         return None
 
     @property
     def next_action_plan(self) -> dict | None:
-        """Get next non-idle action."""
+        """Get next non-idle action from current time."""
         if not self._optimization_result or not self._optimization_result.success:
             return None
 
-        current_hour = datetime.now().hour
+        current_time = datetime.now()
+
         for plan in self._optimization_result.hourly_plan:
-            if plan.hour > current_hour and plan.action != BatteryAction.IDLE:
+            if plan.datetime_start > current_time and plan.action != BatteryAction.IDLE:
                 return plan.to_dict()
         return None
 
@@ -536,7 +548,6 @@ class SmartChargeCoordinator:
             result = self._optimizer.optimize(
                 prices=all_prices,
                 current_soc_kwh=current_soc_kwh,
-                charge_hours=self.charge_hours,
             )
 
             if result.success:
@@ -588,22 +599,22 @@ class SmartChargeCoordinator:
             return
 
         self._status = STATUS_EXECUTING
-        current_hour = datetime.now().hour
+        current_time = datetime.now()
 
-        # Find action for current hour
-        action, plan = self._optimizer.get_action_for_hour(
-            self._optimization_result, current_hour
+        # Find action for current 15-min interval
+        action, plan = self._optimizer.get_action_for_time(
+            self._optimization_result, current_time
         )
 
         _LOGGER.debug(
-            "Executing plan: hour=%d, action=%s, current_action=%s",
-            current_hour, action.value, self._current_action.value
+            "Executing plan: time=%s, action=%s, current_action=%s",
+            current_time.strftime("%H:%M"), action.value, self._current_action.value
         )
 
         try:
             if action == BatteryAction.CHARGE:
                 if self._current_action != BatteryAction.CHARGE:
-                    _LOGGER.info("Starting charge at hour %d", current_hour)
+                    _LOGGER.info("Starting charge at %s", current_time.strftime("%H:%M"))
                 self._current_action = BatteryAction.CHARGE
                 # Always set charge and discharge power to ensure they stay active
                 await self._start_force_charge()
@@ -611,7 +622,7 @@ class SmartChargeCoordinator:
 
             elif action == BatteryAction.DISCHARGE:
                 if self._current_action != BatteryAction.DISCHARGE:
-                    _LOGGER.info("Starting discharge at hour %d", current_hour)
+                    _LOGGER.info("Starting discharge at %s", current_time.strftime("%H:%M"))
                     await self._stop_force_charge()
                 self._current_action = BatteryAction.DISCHARGE
                 # Always set discharge power to ensure it stays active
@@ -619,7 +630,7 @@ class SmartChargeCoordinator:
 
             else:  # IDLE
                 if self._current_action != BatteryAction.IDLE:
-                    _LOGGER.info("Going idle at hour %d", current_hour)
+                    _LOGGER.info("Going idle at %s", current_time.strftime("%H:%M"))
                 self._current_action = BatteryAction.IDLE
                 # Always ensure both charge and discharge are stopped
                 await self._stop_force_charge()

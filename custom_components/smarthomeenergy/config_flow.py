@@ -22,7 +22,6 @@ from .const import (
     CONF_BATTERY_EFFICIENCY,
     CONF_MIN_SOC,
     CONF_MAX_SOC,
-    CONF_CHARGE_HOURS,
     DEFAULT_PRICE_SENSOR,
     DEFAULT_SELL_PRICE_SENSOR,
     DEFAULT_BATTERY_SOC_SENSOR,
@@ -33,7 +32,6 @@ from .const import (
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_MIN_SOC,
     DEFAULT_MAX_SOC,
-    DEFAULT_CHARGE_HOURS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -89,9 +87,6 @@ class SmartHomeEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_MAX_SOC, default=DEFAULT_MAX_SOC): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=50, max=100, step=5, unit_of_measurement="%", mode="slider")
                 ),
-                vol.Required(CONF_CHARGE_HOURS, default=DEFAULT_CHARGE_HOURS): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=12, step=1, unit_of_measurement="timer", mode="box")
-                ),
             }
         )
 
@@ -121,6 +116,30 @@ class SmartHomeEnergyOptionsFlow(config_entries.OptionsFlow):
 
         schema = vol.Schema(
             {
+                vol.Required(
+                    CONF_PRICE_SENSOR,
+                    default=current.get(CONF_PRICE_SENSOR, DEFAULT_PRICE_SENSOR)
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Required(
+                    CONF_SELL_PRICE_SENSOR,
+                    default=current.get(CONF_SELL_PRICE_SENSOR, DEFAULT_SELL_PRICE_SENSOR)
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Required(
+                    CONF_BATTERY_SOC_SENSOR,
+                    default=current.get(CONF_BATTERY_SOC_SENSOR, DEFAULT_BATTERY_SOC_SENSOR)
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Required(
+                    CONF_DISCHARGE_POWER_ENTITY,
+                    default=current.get(CONF_DISCHARGE_POWER_ENTITY, DEFAULT_DISCHARGE_POWER_ENTITY)
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="number")
+                ),
                 vol.Required(
                     CONF_BATTERY_CAPACITY,
                     default=current.get(CONF_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY)
@@ -156,12 +175,6 @@ class SmartHomeEnergyOptionsFlow(config_entries.OptionsFlow):
                     default=current.get(CONF_MAX_SOC, DEFAULT_MAX_SOC)
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=50, max=100, step=5, unit_of_measurement="%", mode="slider")
-                ),
-                vol.Required(
-                    CONF_CHARGE_HOURS,
-                    default=current.get(CONF_CHARGE_HOURS, DEFAULT_CHARGE_HOURS)
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=12, step=1, unit_of_measurement="timer", mode="box")
                 ),
             }
         )

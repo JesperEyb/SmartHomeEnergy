@@ -19,9 +19,9 @@ class BatteryAction(Enum):
 
 @dataclass
 class HourlyPlan:
-    """Plan for a single hour."""
-    hour: int
-    datetime_start: datetime
+    """Plan for a single interval (15 minutes)."""
+    hour: int  # Hour of day (0-23) for compatibility
+    datetime_start: datetime  # Exact start time of this 15-min interval
     action: BatteryAction
     buy_price: float
     sell_price: float
@@ -36,7 +36,7 @@ class HourlyPlan:
         """Convert to dictionary for sensor attributes."""
         return {
             "hour": self.hour,
-            "time": f"{self.hour:02d}:00",
+            "time": self.datetime_start.strftime("%H:%M"),
             "datetime": self.datetime_start.isoformat(),
             "action": self.action.value,
             "buy_price": round(self.buy_price, 4),
@@ -111,18 +111,16 @@ class BatteryOptimizer:
         prices: list[dict],
         current_soc_kwh: float = 0.0,
         start_hour: int | None = None,
-        charge_hours: int | None = None,
     ) -> OptimizationResult:
-        """Run greedy optimization on price data.
+        """Run greedy optimization on price data (15-min intervals).
 
         Args:
-            prices: List of price dicts with 'hour' (datetime) and 'price' (float)
+            prices: List of price dicts with 'start' (datetime) and 'price' (float)
             current_soc_kwh: Current battery state of charge in kWh
             start_hour: Hour to start optimization from (None = current hour)
-            charge_hours: Number of hours to use for charging (None = auto-calculate)
 
         Returns:
-            OptimizationResult with hourly plan
+            OptimizationResult with 15-minute interval plan
         """
         try:
             if not prices:
@@ -171,7 +169,7 @@ class BatteryOptimizer:
                     p["sell_price"] = p["price"]
 
             # Run greedy optimization
-            hourly_plan = self._greedy_optimize(planning_prices, current_soc_kwh, charge_hours)
+            hourly_plan = self._greedy_optimize(planning_prices, current_soc_kwh)
 
             # Calculate totals
             total_charge_cost = sum(h.expected_cost for h in hourly_plan)
@@ -229,44 +227,41 @@ class BatteryOptimizer:
         self,
         prices: list[dict],
         current_soc: float,
-        charge_hours: int | None = None,
     ) -> list[HourlyPlan]:
-        """Greedy optimization algorithm.
+        """Greedy optimization algorithm for 15-min intervals.
 
         Strategy:
-        1. Find hours with lowest prices for charging
-        2. Find hours with highest prices for discharging
+        1. Find intervals with lowest prices for charging
+        2. Find intervals with highest prices for discharging
         3. Ensure charging happens before discharging
         4. Calculate expected costs and revenues
         """
-        n_hours = len(prices)
+        n_intervals = len(prices)
 
         # Create indexed prices with original position
         indexed_prices = [(i, p["buy_price"]) for i, p in enumerate(prices)]
 
-        # Sort by price to find cheapest and most expensive hours
+        # Sort by price to find cheapest and most expensive intervals
         sorted_by_price = sorted(indexed_prices, key=lambda x: x[1])
 
-        # Calculate how many hours we need to charge to fill battery
+        # Calculate how many 15-min intervals we need to charge to fill battery
         available_capacity = self.max_soc_kwh - current_soc
-        charge_per_hour = self.max_charge_power_kw * self.sqrt_efficiency
-        hours_to_full = int((available_capacity / charge_per_hour) + 1) if charge_per_hour > 0 else 0
+        # 15 min = 0.25 hour, so divide hourly power by 4
+        charge_per_interval = (self.max_charge_power_kw / 4.0) * self.sqrt_efficiency
+        intervals_to_full = int((available_capacity / charge_per_interval) + 1) if charge_per_interval > 0 else 0
 
-        # Calculate how many hours we can discharge
-        discharge_per_hour = self.max_discharge_power_kw * self.sqrt_efficiency
-        hours_to_empty = int((self.max_soc_kwh / discharge_per_hour) + 1) if discharge_per_hour > 0 else 0
+        # Calculate how many 15-min intervals we can discharge
+        discharge_per_interval = (self.max_discharge_power_kw / 4.0) * self.sqrt_efficiency
+        intervals_to_empty = int((self.max_soc_kwh / discharge_per_interval) + 1) if discharge_per_interval > 0 else 0
 
-        # Determine charge and discharge hours
-        # Use configured charge_hours if provided, otherwise auto-calculate
-        if charge_hours is not None:
-            n_charge_hours = min(charge_hours, n_hours // 2)  # Max half the day
-        else:
-            n_charge_hours = min(hours_to_full, n_hours // 3)  # Max 1/3 of day for charging
-        cheapest_indices = set(i for i, _ in sorted_by_price[:n_charge_hours])
+        # Determine charge and discharge intervals
+        # Auto-calculate based on battery capacity
+        n_charge_intervals = min(intervals_to_full, n_intervals // 3)  # Max 1/3 of period for charging
+        cheapest_indices = set(i for i, _ in sorted_by_price[:n_charge_intervals])
 
-        # Take most expensive hours for discharging (up to what we can)
-        n_discharge_hours = min(hours_to_empty, n_hours // 3)  # Max 1/3 of day for discharging
-        expensive_indices = set(i for i, _ in sorted_by_price[-n_discharge_hours:])
+        # Take most expensive intervals for discharging (up to what we can)
+        n_discharge_intervals = min(intervals_to_empty, n_intervals // 3)  # Max 1/3 of period for discharging
+        expensive_indices = set(i for i, _ in sorted_by_price[-n_discharge_intervals:])
 
         # Remove overlap (prefer discharging over charging if same hour is both)
         cheapest_indices -= expensive_indices
@@ -299,9 +294,9 @@ class BatteryOptimizer:
             )
 
             if i in cheapest_indices and soc < self.max_soc_kwh:
-                # Charge
+                # Charge (15 min = 0.25 hour)
                 charge_kwh = min(
-                    self.max_charge_power_kw,
+                    self.max_charge_power_kw / 4.0,  # 15 min interval
                     (self.max_soc_kwh - soc) / self.sqrt_efficiency
                 )
                 actual_stored = charge_kwh * self.sqrt_efficiency
@@ -312,9 +307,9 @@ class BatteryOptimizer:
                 soc += actual_stored
 
             elif i in profitable_discharge and soc > self.min_soc_kwh:
-                # Discharge
+                # Discharge (15 min = 0.25 hour)
                 discharge_kwh = min(
-                    self.max_discharge_power_kw,
+                    self.max_discharge_power_kw / 4.0,  # 15 min interval
                     (soc - self.min_soc_kwh)
                 )
                 actual_delivered = discharge_kwh * self.sqrt_efficiency
@@ -329,16 +324,16 @@ class BatteryOptimizer:
 
         return hourly_plan
 
-    def get_action_for_hour(
+    def get_action_for_time(
         self,
         result: OptimizationResult,
-        hour: int,
+        current_time: datetime,
     ) -> tuple[BatteryAction, HourlyPlan | None]:
-        """Get the action for a specific hour.
+        """Get the action for current time (15-min interval).
 
         Args:
             result: Optimization result
-            hour: Hour of day (0-23)
+            current_time: Current datetime
 
         Returns:
             Tuple of (action, plan) or (IDLE, None) if not found
@@ -346,8 +341,17 @@ class BatteryOptimizer:
         if not result.success or not result.hourly_plan:
             return BatteryAction.IDLE, None
 
+        # Round down to nearest 15 minutes
+        rounded_time = current_time.replace(
+            minute=(current_time.minute // 15) * 15,
+            second=0,
+            microsecond=0
+        )
+
+        # Find matching interval
         for plan in result.hourly_plan:
-            if plan.hour == hour:
+            plan_time = plan.datetime_start.replace(second=0, microsecond=0)
+            if plan_time == rounded_time:
                 return plan.action, plan
 
         return BatteryAction.IDLE, None
