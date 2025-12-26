@@ -12,6 +12,7 @@ CONF_MAX_DISCHARGE_POWER = "max_discharge_power"
 CONF_BATTERY_EFFICIENCY = "battery_efficiency"
 CONF_MIN_SOC = "min_soc"
 CONF_MAX_SOC = "max_soc"
+CONF_CHARGE_HOURS = "charge_hours"
 
 # Legacy config keys (for backwards compatibility)
 CONF_CHEAPEST_CHARGE_HOURS = "cheapest_charge_hours"
@@ -29,6 +30,7 @@ DEFAULT_MAX_DISCHARGE_POWER = 2500  # W
 DEFAULT_BATTERY_EFFICIENCY = 90  # %
 DEFAULT_MIN_SOC = 10  # %
 DEFAULT_MAX_SOC = 100  # %
+DEFAULT_CHARGE_HOURS = 2  # hours
 
 # Legacy defaults
 DEFAULT_CHEAPEST_CHARGE_HOURS = 2

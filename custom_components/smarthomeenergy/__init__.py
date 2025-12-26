@@ -24,6 +24,7 @@ from .const import (
     CONF_BATTERY_EFFICIENCY,
     CONF_MIN_SOC,
     CONF_MAX_SOC,
+    CONF_CHARGE_HOURS,
     DEFAULT_PRICE_SENSOR,
     DEFAULT_TOMORROW_PRICE_SENSOR,
     DEFAULT_DISCHARGE_POWER_ENTITY,
@@ -33,6 +34,7 @@ from .const import (
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_MIN_SOC,
     DEFAULT_MAX_SOC,
+    DEFAULT_CHARGE_HOURS,
     SERVICE_OPTIMIZE,
     STATUS_IDLE,
     STATUS_OPTIMIZING,
@@ -261,6 +263,14 @@ class SmartChargeCoordinator:
             DEFAULT_MAX_SOC
         )
 
+    @property
+    def charge_hours(self) -> int:
+        return _get_int(
+            self.entry.options.get(CONF_CHARGE_HOURS,
+                                   self.entry.data.get(CONF_CHARGE_HOURS)),
+            DEFAULT_CHARGE_HOURS
+        )
+
     # State properties
     @property
     def enabled(self) -> bool:
@@ -448,6 +458,7 @@ class SmartChargeCoordinator:
             result = self._optimizer.optimize(
                 prices=all_prices,
                 current_soc_kwh=0.0,  # TODO: Get actual SOC from battery sensor
+                charge_hours=self.charge_hours,
             )
 
             if result.success:

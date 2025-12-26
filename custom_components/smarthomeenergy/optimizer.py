@@ -111,6 +111,7 @@ class BatteryOptimizer:
         prices: list[dict],
         current_soc_kwh: float = 0.0,
         start_hour: int | None = None,
+        charge_hours: int | None = None,
     ) -> OptimizationResult:
         """Run greedy optimization on price data.
 
@@ -118,6 +119,7 @@ class BatteryOptimizer:
             prices: List of price dicts with 'hour' (datetime) and 'price' (float)
             current_soc_kwh: Current battery state of charge in kWh
             start_hour: Hour to start optimization from (None = current hour)
+            charge_hours: Number of hours to use for charging (None = auto-calculate)
 
         Returns:
             OptimizationResult with hourly plan
@@ -168,7 +170,7 @@ class BatteryOptimizer:
                 p["sell_price"] = max(0, p["price"] * 0.7)  # Simplified sell price
 
             # Run greedy optimization
-            hourly_plan = self._greedy_optimize(planning_prices, current_soc_kwh)
+            hourly_plan = self._greedy_optimize(planning_prices, current_soc_kwh, charge_hours)
 
             # Calculate totals
             total_charge_cost = sum(h.expected_cost for h in hourly_plan)
@@ -226,6 +228,7 @@ class BatteryOptimizer:
         self,
         prices: list[dict],
         current_soc: float,
+        charge_hours: int | None = None,
     ) -> list[HourlyPlan]:
         """Greedy optimization algorithm.
 
@@ -253,8 +256,11 @@ class BatteryOptimizer:
         hours_to_empty = int((self.max_soc_kwh / discharge_per_hour) + 1) if discharge_per_hour > 0 else 0
 
         # Determine charge and discharge hours
-        # Take cheapest hours for charging (up to what we need)
-        n_charge_hours = min(hours_to_full, n_hours // 3)  # Max 1/3 of day for charging
+        # Use configured charge_hours if provided, otherwise auto-calculate
+        if charge_hours is not None:
+            n_charge_hours = min(charge_hours, n_hours // 2)  # Max half the day
+        else:
+            n_charge_hours = min(hours_to_full, n_hours // 3)  # Max 1/3 of day for charging
         cheapest_indices = set(i for i, _ in sorted_by_price[:n_charge_hours])
 
         # Take most expensive hours for discharging (up to what we can)

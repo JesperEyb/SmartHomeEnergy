@@ -13,7 +13,8 @@
                     "max_discharge_power": "Max discharge power (W)",
                     "battery_efficiency": "Battery efficiency (%)",
                     "min_soc": "Minimum SOC (%)",
-                    "max_soc": "Maximum SOC (%)"
+                    "max_soc": "Maximum SOC (%)",
+                    "charge_hours": "Charging hours"
                 }
             }
         }
@@ -28,7 +29,8 @@
                     "max_discharge_power": "Max discharge power (W)",
                     "battery_efficiency": "Battery efficiency (%)",
                     "min_soc": "Minimum SOC (%)",
-                    "max_soc": "Maximum SOC (%)"
+                    "max_soc": "Maximum SOC (%)",
+                    "charge_hours": "Charging hours"
                 }
             }
         }

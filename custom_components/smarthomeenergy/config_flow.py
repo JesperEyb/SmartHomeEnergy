@@ -20,6 +20,7 @@ from .const import (
     CONF_BATTERY_EFFICIENCY,
     CONF_MIN_SOC,
     CONF_MAX_SOC,
+    CONF_CHARGE_HOURS,
     DEFAULT_PRICE_SENSOR,
     DEFAULT_DISCHARGE_POWER_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
@@ -28,6 +29,7 @@ from .const import (
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_MIN_SOC,
     DEFAULT_MAX_SOC,
+    DEFAULT_CHARGE_HOURS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,6 +78,9 @@ class SmartHomeEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Required(CONF_MAX_SOC, default=DEFAULT_MAX_SOC): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=50, max=100, step=5, unit_of_measurement="%", mode="slider")
+                ),
+                vol.Required(CONF_CHARGE_HOURS, default=DEFAULT_CHARGE_HOURS): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=1, max=12, step=1, unit_of_measurement="timer", mode="box")
                 ),
             }
         )
@@ -141,6 +146,12 @@ class SmartHomeEnergyOptionsFlow(config_entries.OptionsFlow):
                     default=current.get(CONF_MAX_SOC, DEFAULT_MAX_SOC)
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(min=50, max=100, step=5, unit_of_measurement="%", mode="slider")
+                ),
+                vol.Required(
+                    CONF_CHARGE_HOURS,
+                    default=current.get(CONF_CHARGE_HOURS, DEFAULT_CHARGE_HOURS)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=1, max=12, step=1, unit_of_measurement="timer", mode="box")
                 ),
             }
         )
