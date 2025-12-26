@@ -207,23 +207,36 @@ class SmartChargeCoordinator:
     # Configuration properties
     @property
     def price_sensor(self) -> str:
-        return self.entry.data.get(CONF_PRICE_SENSOR, DEFAULT_PRICE_SENSOR)
+        return self.entry.options.get(
+            CONF_PRICE_SENSOR,
+            self.entry.data.get(CONF_PRICE_SENSOR, DEFAULT_PRICE_SENSOR)
+        )
 
     @property
     def sell_price_sensor(self) -> str:
-        return self.entry.data.get(CONF_SELL_PRICE_SENSOR, DEFAULT_SELL_PRICE_SENSOR)
+        return self.entry.options.get(
+            CONF_SELL_PRICE_SENSOR,
+            self.entry.data.get(CONF_SELL_PRICE_SENSOR, DEFAULT_SELL_PRICE_SENSOR)
+        )
 
     @property
     def battery_soc_sensor(self) -> str:
-        return self.entry.data.get(CONF_BATTERY_SOC_SENSOR, DEFAULT_BATTERY_SOC_SENSOR)
+        return self.entry.options.get(
+            CONF_BATTERY_SOC_SENSOR,
+            self.entry.data.get(CONF_BATTERY_SOC_SENSOR, DEFAULT_BATTERY_SOC_SENSOR)
+        )
 
     @property
     def battery_device_id(self) -> str:
+        # Device ID is set during initial setup and should not change
         return self.entry.data.get(CONF_BATTERY_DEVICE_ID, "")
 
     @property
     def discharge_power_entity(self) -> str:
-        return self.entry.data.get(CONF_DISCHARGE_POWER_ENTITY, DEFAULT_DISCHARGE_POWER_ENTITY)
+        return self.entry.options.get(
+            CONF_DISCHARGE_POWER_ENTITY,
+            self.entry.data.get(CONF_DISCHARGE_POWER_ENTITY, DEFAULT_DISCHARGE_POWER_ENTITY)
+        )
 
     @property
     def battery_capacity(self) -> float:
