@@ -15,8 +15,7 @@
                     "max_discharge_power": "Max afladningseffekt (W)",
                     "battery_efficiency": "Batteri effektivitet (%)",
                     "min_soc": "Minimum SOC (%)",
-                    "max_soc": "Maximum SOC (%)",
-                    "charge_hours": "Antal opladningstimer"
+                    "max_soc": "Maximum SOC (%)"
                 }
             }
         }
@@ -26,13 +25,16 @@
             "init": {
                 "title": "SmartHomeEnergy Indstillinger",
                 "data": {
+                    "price_sensor": "Købspris sensor",
+                    "sell_price_sensor": "Salgspris sensor (besparelser)",
+                    "battery_soc_sensor": "Batteri ladeniveau sensor (SOC %)",
+                    "discharge_power_entity": "Maksimal afladningseffekt entity",
                     "battery_capacity": "Batteri kapacitet (kWh)",
                     "charge_power": "Opladningseffekt (W)",
                     "max_discharge_power": "Max afladningseffekt (W)",
                     "battery_efficiency": "Batteri effektivitet (%)",
                     "min_soc": "Minimum SOC (%)",
-                    "max_soc": "Maximum SOC (%)",
-                    "charge_hours": "Antal opladningstimer"
+                    "max_soc": "Maximum SOC (%)"
                 }
             }
         }

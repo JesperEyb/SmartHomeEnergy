@@ -26,7 +26,6 @@ from .const import (
     CONF_BATTERY_EFFICIENCY,
     CONF_MIN_SOC,
     CONF_MAX_SOC,
-    CONF_CHARGE_HOURS,
     DEFAULT_PRICE_SENSOR,
     DEFAULT_SELL_PRICE_SENSOR,
     DEFAULT_BATTERY_SOC_SENSOR,
@@ -38,7 +37,6 @@ from .const import (
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_MIN_SOC,
     DEFAULT_MAX_SOC,
-    DEFAULT_CHARGE_HOURS,
     SERVICE_OPTIMIZE,
     STATUS_IDLE,
     STATUS_OPTIMIZING,
@@ -273,14 +271,6 @@ class SmartChargeCoordinator:
             self.entry.options.get(CONF_MAX_SOC,
                                    self.entry.data.get(CONF_MAX_SOC)),
             DEFAULT_MAX_SOC
-        )
-
-    @property
-    def charge_hours(self) -> int:
-        return _get_int(
-            self.entry.options.get(CONF_CHARGE_HOURS,
-                                   self.entry.data.get(CONF_CHARGE_HOURS)),
-            DEFAULT_CHARGE_HOURS
         )
 
     # State properties
@@ -536,7 +526,6 @@ class SmartChargeCoordinator:
             result = self._optimizer.optimize(
                 prices=all_prices,
                 current_soc_kwh=current_soc_kwh,
-                charge_hours=self.charge_hours,
             )
 
             if result.success:
@@ -588,16 +577,16 @@ class SmartChargeCoordinator:
             return
 
         self._status = STATUS_EXECUTING
-        current_hour = datetime.now().hour
+        current_time = datetime.now()
 
-        # Find action for current hour
-        action, plan = self._optimizer.get_action_for_hour(
-            self._optimization_result, current_hour
+        # Find action for current 15-min interval
+        action, plan = self._optimizer.get_action_for_time(
+            self._optimization_result, current_time
         )
 
         _LOGGER.debug(
-            "Executing plan: hour=%d, action=%s, current_action=%s",
-            current_hour, action.value, self._current_action.value
+            "Executing plan: time=%s, action=%s, current_action=%s",
+            current_time.strftime("%H:%M"), action.value, self._current_action.value
         )
 
         try:
