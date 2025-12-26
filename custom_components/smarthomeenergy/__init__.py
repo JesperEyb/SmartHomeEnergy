@@ -482,80 +482,94 @@ class SmartChargeCoordinator:
             current_soc_kwh = 0.0
             soc_state = self.hass.states.get(self.battery_soc_sensor)
             if soc_state:
+                _LOGGER.debug("SOC sensor %s state: %s, attributes: %s",
+                             self.battery_soc_sensor, soc_state.state, soc_state.attributes)
                 try:
                     soc_value = float(soc_state.state)
+                    unit = soc_state.attributes.get("unit_of_measurement", "")
+
+                    _LOGGER.info("Raw SOC value: %.2f %s (battery capacity: %.2f kWh)",
+                                soc_value, unit, self.battery_capacity)
 
                     # Check if SOC is already in kWh or in % (0-100)
-                    # If value is greater than battery capacity, it's likely in % (e.g., 85%)
-                    # If value is small (< 100), could be either % or kWh
                     if soc_value > 100:
                         # Definitely in %, convert to kWh
                         current_soc_kwh = (soc_value / 100.0) * self.battery_capacity
-                        _LOGGER.debug("Battery SOC: %.1f%% = %.2f kWh", soc_value, current_soc_kwh)
+                        _LOGGER.info("Battery SOC: %.1f%% = %.2f kWh", soc_value, current_soc_kwh)
                     elif soc_value <= self.battery_capacity:
                         # Could be in % (0-100) or already in kWh
                         # Assume % and convert to kWh
                         soc_percent = soc_value
                         current_soc_kwh = (soc_percent / 100.0) * self.battery_capacity
-                        _LOGGER.debug("Battery SOC: %.1f%% = %.2f kWh (assumed %%, unit of measurement: %s)",
-                                     soc_percent, current_soc_kwh, soc_state.attributes.get("unit_of_measurement", "unknown"))
+                        _LOGGER.info("Battery SOC: %.1f%% = %.2f kWh (assumed %%, unit: %s)",
+                                    soc_percent, current_soc_kwh, unit)
                     else:
                         # Value is larger than battery capacity, something is wrong
-                        _LOGGER.warning("SOC value %.2f is larger than battery capacity %.2f, assuming 0",
+                        _LOGGER.warning("SOC value %.2f is larger than battery capacity %.2f kWh, assuming 0",
                                        soc_value, self.battery_capacity)
                         current_soc_kwh = 0.0
                 except (ValueError, TypeError) as e:
-                    _LOGGER.warning("Could not read battery SOC from %s: %s", self.battery_soc_sensor, e)
+                    _LOGGER.error("Could not read battery SOC from %s (state: %s): %s",
+                                 self.battery_soc_sensor, soc_state.state, e)
             else:
-                _LOGGER.warning("Battery SOC sensor %s not found, assuming empty battery", self.battery_soc_sensor)
+                _LOGGER.error("Battery SOC sensor %s not found! Available sensors: %s",
+                             self.battery_soc_sensor,
+                             [s for s in self.hass.states.async_entity_ids() if 'battery' in s.lower()][:10])
 
             # Get sell price data (for self-consumption savings calculation)
-            sell_prices = {}
             sell_state = self.hass.states.get(self.sell_price_sensor)
+            all_sell_prices = []
+
             if sell_state:
+                _LOGGER.debug("Sell price sensor attributes: %s", list(sell_state.attributes.keys()))
+
                 # Try same format as buy prices
                 sell_prices_attr = sell_state.attributes.get("prices")
                 if sell_prices_attr:
-                    for entry in sell_prices_attr:
-                        try:
-                            hour_dt = entry.get("hour") or entry.get("start")
-                            price = entry.get("price") or entry.get("value")
-                            if hour_dt and price is not None:
-                                if isinstance(hour_dt, str):
-                                    hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
-                                if hasattr(hour_dt, 'tzinfo') and hour_dt.tzinfo is not None:
-                                    hour_dt = hour_dt.replace(tzinfo=None)
-                                sell_prices[hour_dt.isoformat()] = float(price)
-                        except Exception as e:
-                            _LOGGER.debug("Error parsing sell price entry: %s", e)
+                    _LOGGER.debug("Got %d sell prices from sensor", len(sell_prices_attr))
+                    if sell_prices_attr:
+                        _LOGGER.debug("First sell price entry: %s", sell_prices_attr[0])
+                    all_sell_prices.extend(sell_prices_attr)
 
-                # Get tomorrow's sell prices
-                tomorrow_sell_sensor = self.sell_price_sensor.replace(
-                    "sensor.", "binary_sensor."
-                ).replace("current_price", "tomorrow_spotprice")
-                tomorrow_sell_state = self.hass.states.get(tomorrow_sell_sensor)
-                if tomorrow_sell_state:
-                    tomorrow_sell_prices = tomorrow_sell_state.attributes.get("prices") or []
-                    for entry in tomorrow_sell_prices:
-                        try:
-                            hour_dt = entry.get("hour") or entry.get("start")
-                            price = entry.get("price") or entry.get("value")
-                            if hour_dt and price is not None:
-                                if isinstance(hour_dt, str):
-                                    hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
-                                if hasattr(hour_dt, 'tzinfo') and hour_dt.tzinfo is not None:
-                                    hour_dt = hour_dt.replace(tzinfo=None)
-                                sell_prices[hour_dt.isoformat()] = float(price)
-                        except Exception as e:
-                            _LOGGER.debug("Error parsing tomorrow sell price entry: %s", e)
+                    # Get tomorrow's sell prices
+                    tomorrow_sell_sensor = self.sell_price_sensor.replace(
+                        "sensor.", "binary_sensor."
+                    ).replace("current_price", "tomorrow_spotprice")
+                    tomorrow_sell_state = self.hass.states.get(tomorrow_sell_sensor)
+                    if tomorrow_sell_state:
+                        tomorrow_sell_prices = tomorrow_sell_state.attributes.get("prices") or []
+                        if tomorrow_sell_prices:
+                            _LOGGER.debug("Got %d tomorrow sell prices", len(tomorrow_sell_prices))
+                            all_sell_prices.extend(tomorrow_sell_prices)
+                else:
+                    # Try Energi Data Service format
+                    raw_today = sell_state.attributes.get("raw_today") or []
+                    raw_tomorrow = sell_state.attributes.get("raw_tomorrow") or []
+                    all_sell_prices = raw_today + raw_tomorrow
+                    _LOGGER.debug("Using Energi Data Service format for sell prices")
+            else:
+                _LOGGER.warning("Sell price sensor %s not found", self.sell_price_sensor)
 
-            _LOGGER.debug("Got %d sell price entries", len(sell_prices))
+            # Parse sell prices using SAME function as buy prices for consistency
+            parsed_sell_prices = _parse_price_data(all_sell_prices)
+            sell_prices = {p["start"].isoformat(): p["price"] for p in parsed_sell_prices}
+
+            _LOGGER.info("Parsed %d sell price entries (from %d raw entries)",
+                        len(sell_prices), len(all_sell_prices))
+            if sell_prices:
+                first_key = list(sell_prices.keys())[0]
+                _LOGGER.debug("First sell price datetime key: %s = %.3f", first_key, sell_prices[first_key])
 
             # Add sell prices to all_prices
+            matched_count = 0
+            hourly_match_count = 0
+            fallback_count = 0
+
             for price_entry in all_prices:
                 dt_key = price_entry["start"].isoformat()
                 if dt_key in sell_prices:
                     price_entry["sell_price"] = sell_prices[dt_key]
+                    matched_count += 1
                 else:
                     # Try to find sell price for the hour (round down to hour)
                     # This handles case where sell prices are hourly but buy prices are 15-min intervals
@@ -563,11 +577,22 @@ class SmartChargeCoordinator:
                     hour_key = hour_start.isoformat()
                     if hour_key in sell_prices:
                         price_entry["sell_price"] = sell_prices[hour_key]
-                        _LOGGER.debug("Using hourly sell price for %s from %s", dt_key, hour_key)
+                        hourly_match_count += 1
                     else:
                         # Fallback: use buy price as sell price (self-consumption savings)
                         price_entry["sell_price"] = price_entry["price"]
-                        _LOGGER.debug("No sell price for %s, using buy price", dt_key)
+                        fallback_count += 1
+
+            _LOGGER.info("Sell price matching: %d exact, %d hourly, %d fallback (total %d)",
+                        matched_count, hourly_match_count, fallback_count, len(all_prices))
+
+            # Debug first few entries if there are fallbacks
+            if fallback_count > 0:
+                _LOGGER.debug("Sample buy datetime: %s", all_prices[0]["start"].isoformat())
+                if sell_prices:
+                    _LOGGER.debug("Sample sell datetime: %s", list(sell_prices.keys())[0])
+                else:
+                    _LOGGER.warning("No sell prices parsed!")
 
             # Run optimization
             result = self._optimizer.optimize(
