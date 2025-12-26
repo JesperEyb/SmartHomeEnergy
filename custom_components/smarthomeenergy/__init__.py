@@ -321,25 +321,34 @@ class SmartChargeCoordinator:
 
     @property
     def current_hour_plan(self) -> dict | None:
-        """Get plan for current hour."""
+        """Get plan for current 15-minute interval."""
         if not self._optimization_result or not self._optimization_result.success:
             return None
 
-        current_hour = datetime.now().hour
+        current_time = datetime.now()
+        # Round down to nearest 15 minutes
+        rounded_time = current_time.replace(
+            minute=(current_time.minute // 15) * 15,
+            second=0,
+            microsecond=0
+        )
+
         for plan in self._optimization_result.hourly_plan:
-            if plan.hour == current_hour:
+            plan_time = plan.datetime_start.replace(second=0, microsecond=0)
+            if plan_time == rounded_time:
                 return plan.to_dict()
         return None
 
     @property
     def next_action_plan(self) -> dict | None:
-        """Get next non-idle action."""
+        """Get next non-idle action from current time."""
         if not self._optimization_result or not self._optimization_result.success:
             return None
 
-        current_hour = datetime.now().hour
+        current_time = datetime.now()
+
         for plan in self._optimization_result.hourly_plan:
-            if plan.hour > current_hour and plan.action != BatteryAction.IDLE:
+            if plan.datetime_start > current_time and plan.action != BatteryAction.IDLE:
                 return plan.to_dict()
         return None
 
