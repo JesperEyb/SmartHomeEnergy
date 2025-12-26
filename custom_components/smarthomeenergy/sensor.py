@@ -180,6 +180,7 @@ class SmartHomeEnergyPlanSensor(SmartHomeEnergyBaseSensor):
             "current_hour": current_hour,
             "hours_planned": len(plan),
             "hourly_summary": hourly_summary,
+            "hourly_plan": plan,  # Full plan with all details for graphing
         }
 
         result = self._coordinator.optimization_result

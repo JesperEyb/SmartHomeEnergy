@@ -5,7 +5,9 @@
                 "title": "SmartHomeEnergy Setup",
                 "description": "Configure smart battery control based on electricity prices.",
                 "data": {
-                    "price_sensor": "Electricity price sensor",
+                    "price_sensor": "Buy price sensor",
+                    "sell_price_sensor": "Sell price sensor (savings)",
+                    "battery_soc_sensor": "Battery state of charge sensor (SOC %)",
                     "battery_device_id": "Battery device (Huawei Solar)",
                     "discharge_power_entity": "Maximum discharge power entity",
                     "battery_capacity": "Battery capacity (kWh)",
@@ -13,7 +15,8 @@
                     "max_discharge_power": "Max discharge power (W)",
                     "battery_efficiency": "Battery efficiency (%)",
                     "min_soc": "Minimum SOC (%)",
-                    "max_soc": "Maximum SOC (%)"
+                    "max_soc": "Maximum SOC (%)",
+                    "charge_hours": "Charging hours"
                 }
             }
         }
@@ -28,7 +31,8 @@
                     "max_discharge_power": "Max discharge power (W)",
                     "battery_efficiency": "Battery efficiency (%)",
                     "min_soc": "Minimum SOC (%)",
-                    "max_soc": "Maximum SOC (%)"
+                    "max_soc": "Maximum SOC (%)",
+                    "charge_hours": "Charging hours"
                 }
             }
         }

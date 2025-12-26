@@ -16,6 +16,8 @@ from homeassistant.helpers.event import async_track_time_interval, async_track_t
 from .const import (
     DOMAIN,
     CONF_PRICE_SENSOR,
+    CONF_SELL_PRICE_SENSOR,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_BATTERY_DEVICE_ID,
     CONF_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_CAPACITY,
@@ -24,7 +26,10 @@ from .const import (
     CONF_BATTERY_EFFICIENCY,
     CONF_MIN_SOC,
     CONF_MAX_SOC,
+    CONF_CHARGE_HOURS,
     DEFAULT_PRICE_SENSOR,
+    DEFAULT_SELL_PRICE_SENSOR,
+    DEFAULT_BATTERY_SOC_SENSOR,
     DEFAULT_TOMORROW_PRICE_SENSOR,
     DEFAULT_DISCHARGE_POWER_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
@@ -33,6 +38,7 @@ from .const import (
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_MIN_SOC,
     DEFAULT_MAX_SOC,
+    DEFAULT_CHARGE_HOURS,
     SERVICE_OPTIMIZE,
     STATUS_IDLE,
     STATUS_OPTIMIZING,
@@ -206,6 +212,14 @@ class SmartChargeCoordinator:
         return self.entry.data.get(CONF_PRICE_SENSOR, DEFAULT_PRICE_SENSOR)
 
     @property
+    def sell_price_sensor(self) -> str:
+        return self.entry.data.get(CONF_SELL_PRICE_SENSOR, DEFAULT_SELL_PRICE_SENSOR)
+
+    @property
+    def battery_soc_sensor(self) -> str:
+        return self.entry.data.get(CONF_BATTERY_SOC_SENSOR, DEFAULT_BATTERY_SOC_SENSOR)
+
+    @property
     def battery_device_id(self) -> str:
         return self.entry.data.get(CONF_BATTERY_DEVICE_ID, "")
 
@@ -259,6 +273,14 @@ class SmartChargeCoordinator:
             self.entry.options.get(CONF_MAX_SOC,
                                    self.entry.data.get(CONF_MAX_SOC)),
             DEFAULT_MAX_SOC
+        )
+
+    @property
+    def charge_hours(self) -> int:
+        return _get_int(
+            self.entry.options.get(CONF_CHARGE_HOURS,
+                                   self.entry.data.get(CONF_CHARGE_HOURS)),
+            DEFAULT_CHARGE_HOURS
         )
 
     # State properties
@@ -444,10 +466,77 @@ class SmartChargeCoordinator:
 
             _LOGGER.debug("Got %d parsed price entries", len(all_prices))
 
+            # Get current battery SOC
+            current_soc_kwh = 0.0
+            soc_state = self.hass.states.get(self.battery_soc_sensor)
+            if soc_state:
+                try:
+                    # SOC is usually in % (0-100), convert to kWh
+                    soc_percent = float(soc_state.state)
+                    current_soc_kwh = (soc_percent / 100.0) * self.battery_capacity
+                    _LOGGER.debug("Battery SOC: %.1f%% = %.2f kWh", soc_percent, current_soc_kwh)
+                except (ValueError, TypeError) as e:
+                    _LOGGER.warning("Could not read battery SOC from %s: %s", self.battery_soc_sensor, e)
+            else:
+                _LOGGER.warning("Battery SOC sensor %s not found, assuming empty battery", self.battery_soc_sensor)
+
+            # Get sell price data (for self-consumption savings calculation)
+            sell_prices = {}
+            sell_state = self.hass.states.get(self.sell_price_sensor)
+            if sell_state:
+                # Try same format as buy prices
+                sell_prices_attr = sell_state.attributes.get("prices")
+                if sell_prices_attr:
+                    for entry in sell_prices_attr:
+                        try:
+                            hour_dt = entry.get("hour") or entry.get("start")
+                            price = entry.get("price") or entry.get("value")
+                            if hour_dt and price is not None:
+                                if isinstance(hour_dt, str):
+                                    hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
+                                if hasattr(hour_dt, 'tzinfo') and hour_dt.tzinfo is not None:
+                                    hour_dt = hour_dt.replace(tzinfo=None)
+                                sell_prices[hour_dt.isoformat()] = float(price)
+                        except Exception as e:
+                            _LOGGER.debug("Error parsing sell price entry: %s", e)
+
+                # Get tomorrow's sell prices
+                tomorrow_sell_sensor = self.sell_price_sensor.replace(
+                    "sensor.", "binary_sensor."
+                ).replace("current_price", "tomorrow_spotprice")
+                tomorrow_sell_state = self.hass.states.get(tomorrow_sell_sensor)
+                if tomorrow_sell_state:
+                    tomorrow_sell_prices = tomorrow_sell_state.attributes.get("prices") or []
+                    for entry in tomorrow_sell_prices:
+                        try:
+                            hour_dt = entry.get("hour") or entry.get("start")
+                            price = entry.get("price") or entry.get("value")
+                            if hour_dt and price is not None:
+                                if isinstance(hour_dt, str):
+                                    hour_dt = datetime.fromisoformat(hour_dt.replace("Z", "+00:00"))
+                                if hasattr(hour_dt, 'tzinfo') and hour_dt.tzinfo is not None:
+                                    hour_dt = hour_dt.replace(tzinfo=None)
+                                sell_prices[hour_dt.isoformat()] = float(price)
+                        except Exception as e:
+                            _LOGGER.debug("Error parsing tomorrow sell price entry: %s", e)
+
+            _LOGGER.debug("Got %d sell price entries", len(sell_prices))
+
+            # Add sell prices to all_prices
+            for price_entry in all_prices:
+                dt_key = price_entry["start"].isoformat()
+                if dt_key in sell_prices:
+                    price_entry["sell_price"] = sell_prices[dt_key]
+                else:
+                    # Fallback: use buy price as sell price (self-consumption savings)
+                    price_entry["sell_price"] = price_entry["price"]
+                    _LOGGER.debug("No sell price for %s, using buy price", dt_key)
+
             # Run optimization
             result = self._optimizer.optimize(
                 prices=all_prices,
-                current_soc_kwh=0.0,  # TODO: Get actual SOC from battery sensor
+                current_soc_kwh=current_soc_kwh,
+                charge_hours=self.charge_hours,
             )
 
             if result.success:
@@ -515,24 +604,26 @@ class SmartChargeCoordinator:
             if action == BatteryAction.CHARGE:
                 if self._current_action != BatteryAction.CHARGE:
                     _LOGGER.info("Starting charge at hour %d", current_hour)
-                    await self._start_force_charge()
-                    # Also set discharge to 0 during charging
-                    await self._set_discharge_power(0)
                 self._current_action = BatteryAction.CHARGE
+                # Always set charge and discharge power to ensure they stay active
+                await self._start_force_charge()
+                await self._set_discharge_power(0)
 
             elif action == BatteryAction.DISCHARGE:
                 if self._current_action != BatteryAction.DISCHARGE:
                     _LOGGER.info("Starting discharge at hour %d", current_hour)
                     await self._stop_force_charge()
-                    await self._set_discharge_power(self.max_discharge_power)
                 self._current_action = BatteryAction.DISCHARGE
+                # Always set discharge power to ensure it stays active
+                await self._set_discharge_power(self.max_discharge_power)
 
             else:  # IDLE
                 if self._current_action != BatteryAction.IDLE:
                     _LOGGER.info("Going idle at hour %d", current_hour)
-                    await self._stop_force_charge()
-                    await self._set_discharge_power(0)
                 self._current_action = BatteryAction.IDLE
+                # Always ensure both charge and discharge are stopped
+                await self._stop_force_charge()
+                await self._set_discharge_power(0)
 
             self._notify_listeners()
 
