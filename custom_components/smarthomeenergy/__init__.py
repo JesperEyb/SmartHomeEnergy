@@ -592,7 +592,7 @@ class SmartChargeCoordinator:
         try:
             if action == BatteryAction.CHARGE:
                 if self._current_action != BatteryAction.CHARGE:
-                    _LOGGER.info("Starting charge at hour %d", current_hour)
+                    _LOGGER.info("Starting charge at %s", current_time.strftime("%H:%M"))
                 self._current_action = BatteryAction.CHARGE
                 # Always set charge and discharge power to ensure they stay active
                 await self._start_force_charge()
@@ -600,7 +600,7 @@ class SmartChargeCoordinator:
 
             elif action == BatteryAction.DISCHARGE:
                 if self._current_action != BatteryAction.DISCHARGE:
-                    _LOGGER.info("Starting discharge at hour %d", current_hour)
+                    _LOGGER.info("Starting discharge at %s", current_time.strftime("%H:%M"))
                     await self._stop_force_charge()
                 self._current_action = BatteryAction.DISCHARGE
                 # Always set discharge power to ensure it stays active
@@ -608,7 +608,7 @@ class SmartChargeCoordinator:
 
             else:  # IDLE
                 if self._current_action != BatteryAction.IDLE:
-                    _LOGGER.info("Going idle at hour %d", current_hour)
+                    _LOGGER.info("Going idle at %s", current_time.strftime("%H:%M"))
                 self._current_action = BatteryAction.IDLE
                 # Always ensure both charge and discharge are stopped
                 await self._stop_force_charge()
