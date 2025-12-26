@@ -4,6 +4,8 @@ DOMAIN = "smarthomeenergy"
 
 # Configuration keys
 CONF_PRICE_SENSOR = "price_sensor"
+CONF_SELL_PRICE_SENSOR = "sell_price_sensor"
+CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
 CONF_BATTERY_DEVICE_ID = "battery_device_id"
 CONF_DISCHARGE_POWER_ENTITY = "discharge_power_entity"
 CONF_BATTERY_CAPACITY = "battery_capacity"
@@ -22,6 +24,8 @@ CONF_NIGHT_END = "night_end"
 
 # Default values
 DEFAULT_PRICE_SENSOR = "sensor.stromligning_current_price_vat"
+DEFAULT_SELL_PRICE_SENSOR = "sensor.stromligning_current_price_vat"  # Usually same as buy price for self-consumption
+DEFAULT_BATTERY_SOC_SENSOR = "sensor.battery_state_of_capacity"
 DEFAULT_TOMORROW_PRICE_SENSOR = "binary_sensor.stromligning_tomorrow_spotprice_vat"
 DEFAULT_DISCHARGE_POWER_ENTITY = "number.battery_maximum_discharging_power"
 DEFAULT_BATTERY_CAPACITY = 10.0  # kWh

@@ -163,11 +163,12 @@ class BatteryOptimizer:
             # Sort by datetime
             planning_prices.sort(key=lambda x: x["datetime"])
 
-            # Calculate buy/sell prices (sell price typically lower due to fees)
-            # Assuming sell price is 70% of buy price (adjust as needed)
+            # Set buy/sell prices from parsed data
             for p in planning_prices:
                 p["buy_price"] = p["price"]
-                p["sell_price"] = max(0, p["price"] * 0.7)  # Simplified sell price
+                # Use sell_price if provided, otherwise fallback to buy price (self-consumption)
+                if "sell_price" not in p or p["sell_price"] is None:
+                    p["sell_price"] = p["price"]
 
             # Run greedy optimization
             hourly_plan = self._greedy_optimize(planning_prices, current_soc_kwh, charge_hours)

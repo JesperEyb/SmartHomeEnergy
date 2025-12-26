@@ -12,6 +12,8 @@ from homeassistant.helpers import selector
 from .const import (
     DOMAIN,
     CONF_PRICE_SENSOR,
+    CONF_SELL_PRICE_SENSOR,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_BATTERY_DEVICE_ID,
     CONF_DISCHARGE_POWER_ENTITY,
     CONF_BATTERY_CAPACITY,
@@ -22,6 +24,8 @@ from .const import (
     CONF_MAX_SOC,
     CONF_CHARGE_HOURS,
     DEFAULT_PRICE_SENSOR,
+    DEFAULT_SELL_PRICE_SENSOR,
+    DEFAULT_BATTERY_SOC_SENSOR,
     DEFAULT_DISCHARGE_POWER_ENTITY,
     DEFAULT_BATTERY_CAPACITY,
     DEFAULT_CHARGE_POWER,
@@ -53,6 +57,12 @@ class SmartHomeEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_PRICE_SENSOR, default=DEFAULT_PRICE_SENSOR): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Required(CONF_SELL_PRICE_SENSOR, default=DEFAULT_SELL_PRICE_SENSOR): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor")
+                ),
+                vol.Required(CONF_BATTERY_SOC_SENSOR, default=DEFAULT_BATTERY_SOC_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor")
                 ),
                 vol.Required(CONF_BATTERY_DEVICE_ID): selector.DeviceSelector(

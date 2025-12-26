@@ -5,7 +5,9 @@
                 "title": "SmartHomeEnergy Opsætning",
                 "description": "Konfigurer smart batteristyring baseret på elpriser.",
                 "data": {
-                    "price_sensor": "Elpris sensor",
+                    "price_sensor": "Købspris sensor",
+                    "sell_price_sensor": "Salgspris sensor (besparelser)",
+                    "battery_soc_sensor": "Batteri ladeniveau sensor (SOC %)",
                     "battery_device_id": "Batteri enhed (Huawei Solar)",
                     "discharge_power_entity": "Maksimal afladningseffekt entity",
                     "battery_capacity": "Batteri kapacitet (kWh)",
